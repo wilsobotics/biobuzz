@@ -139,7 +139,7 @@ public class BallDetectorPipeline implements VisionProcessor {
     public void resume()           { suspend = false; }
 
     @Override
-    public void init(int width, int height, org.firstinspires.ftc.vision.CameraCalibration calibration) {
+    public void init(int width, int height, org.firstinspires.ftc.robotcore.internal.camera.calibration.CameraCalibration calibration) {
         // No per-resolution init needed; constants are pixel-based.
     }
 

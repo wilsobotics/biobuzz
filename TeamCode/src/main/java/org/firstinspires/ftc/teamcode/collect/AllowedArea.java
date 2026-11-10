@@ -13,6 +13,7 @@ public final class AllowedArea {
     private final FieldRect rect;      // manual frame; null = nowhere
     private final boolean auto;
     private final FieldFrame frame;
+    private final FieldRect ownHalf;
 
     public AllowedArea(CollectRequest req, FieldFrame frame) {
         FieldRect r = req.zone.rect(req.alliance);
@@ -22,6 +23,7 @@ public final class AllowedArea {
         this.rect = r;
         this.auto = req.auto;
         this.frame = frame;
+        this.ownHalf = FieldGeometry.ownHalf(req.alliance);
     }
 
     public FieldRect rect() {
@@ -48,15 +50,50 @@ public final class AllowedArea {
         return Math.abs(m[0] - FieldGeometry.FIELD_CENTER) >= CollectConfig.MIDLINE_MARGIN_IN + b.sigma();
     }
 
-    /** The rest of the field as Weaver obstacles. */
-    public List<Zone> outsideZones() {
+    /** In AUTO, whether a Pedro point is on our half (G402); always true outside AUTO. */
+    public boolean onOwnHalfPedro(double x, double y) {
+        if (!auto) {
+            return true;
+        }
+        double[] m = frame.toManual(x, y);
+        return ownHalf.contains(m[0], m[1]);
+    }
+
+    /**
+     * The mandatory AUTO barrier: the opponent's half as one Weaver obstacle (crossing is a MAJOR
+     * FOUL, G402). Empty outside AUTO. Independent of the zone preset.
+     */
+    public List<Zone> autoBarrierZones() {
+        if (!auto) {
+            return Collections.emptyList();
+        }
+        ArrayList<Zone> out = new ArrayList<Zone>();
+        for (FieldRect r : ownHalf.complementIn(FieldRect.FIELD)) {
+            out.add(FieldGeometry.rectZone(r, frame));
+        }
+        return out;
+    }
+
+    /** The preset's own limits: the parts of our half (AUTO) or the field (TeleOp) outside the area. */
+    public List<Zone> presetBandZones() {
         if (rect == null) {
             return Collections.emptyList();
         }
         ArrayList<Zone> out = new ArrayList<Zone>();
-        for (FieldRect r : rect.complementIn(FieldRect.FIELD)) {
+        for (FieldRect r : rect.complementIn(bounds())) {
             out.add(FieldGeometry.rectZone(r, frame));
         }
         return out;
+    }
+
+    /** The rest of the field as Weaver obstacles: the AUTO barrier plus the preset bands. */
+    public List<Zone> outsideZones() {
+        ArrayList<Zone> out = new ArrayList<Zone>(autoBarrierZones());
+        out.addAll(presetBandZones());
+        return out;
+    }
+
+    private FieldRect bounds() {
+        return auto ? ownHalf : FieldRect.FIELD;
     }
 }

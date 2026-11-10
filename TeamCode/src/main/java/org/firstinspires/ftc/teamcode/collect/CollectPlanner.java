@@ -74,21 +74,37 @@ public final class CollectPlanner {
         });
         ArrayList<MapBall> out = new ArrayList<MapBall>();
         int used = 0;
+        MapBall maybeTwoFallback = null;   // first maybe-two that only missed for being counted as two
         for (MapBall b : pool) {
             if (used >= budget || out.size() >= CollectConfig.MAX_WEAVER_TARGETS) {
                 break;
             }
-            out.add(b);
-            used += b.maybeTwo() ? 2 : 1;
+            int cost = b.maybeTwo() ? 2 : 1;
+            if (used + cost <= budget) {
+                out.add(b);
+                used += cost;
+            } else if (maybeTwoFallback == null && b.maybeTwo() && budget - used >= 1) {
+                maybeTwoFallback = b;
+            }
+        }
+        // A "maybe two" may be one ball: better than an empty list.
+        if (out.isEmpty() && maybeTwoFallback != null) {
+            out.add(maybeTwoFallback);
         }
         return out;
     }
 
-    /** Field obstacles + the outside of our area (only when we are inside it) + any providers. */
+    /**
+     * Field obstacles + the AUTO opponent-half barrier (whenever we are on our half; off it, none, so
+     * we can drive home) + the preset's bands (only when we are inside the preset) + any providers.
+     */
     public List<Zone> obstacles(Pose robot, AllowedArea area, List<ObstacleProvider> providers) {
         ArrayList<Zone> z = new ArrayList<Zone>(FieldGeometry.staticObstacles(frame));
+        if (area.onOwnHalfPedro(robot.x(), robot.y())) {
+            z.addAll(area.autoBarrierZones());
+        }
         if (area.containsPedro(robot.x(), robot.y())) {
-            z.addAll(area.outsideZones());
+            z.addAll(area.presetBandZones());
         }
         for (ObstacleProvider p : providers) {
             z.addAll(p.obstacles());

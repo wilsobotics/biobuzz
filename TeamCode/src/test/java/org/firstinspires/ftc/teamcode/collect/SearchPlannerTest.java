@@ -1,10 +1,15 @@
 package org.firstinspires.ftc.teamcode.collect;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import com.pedropathing.math.Pose;
+import com.skeletonarmy.marrow.zones.Point;
+import com.skeletonarmy.marrow.zones.Zone;
 
+import org.firstinspires.ftc.teamcode.perception.Angles;
 import org.firstinspires.ftc.teamcode.perception.BallClass;
 import org.firstinspires.ftc.teamcode.perception.BallMap;
 import org.junit.Test;
@@ -30,6 +35,22 @@ public class SearchPlannerTest {
         assertEquals(20, l.pose.y(), 1e-6);
         assertEquals(0, l.pose.heading(), 1e-6);
         assertEquals("hint:" + map.all().get(0).id(), l.key);
+    }
+
+    @Test
+    public void hintLookPoseSwingsRoundTheHiveInsteadOfLandingInIt() {
+        BallMap map = new BallMap();
+        MapSeeds.hints(map, BallClass.POLLEN, 110.0, 70.0);
+        CollectRequest req = CollectRequest.builder(Alliance.RED, false).build();
+        Pose from = new Pose(20, 70, 0);   // the direct standoff (80,70) is inside the hive
+        SearchPlanner.Look l = search.nextLook(from, map.hints(), req, new AllowedArea(req, frame),
+                new HashSet<String>());
+        assertNotNull(l);
+        double margin = CollectConfig.ROBOT_LENGTH_IN / 2 + CollectConfig.CLEARANCE_IN;
+        Zone hive = FieldGeometry.rectZone(FieldGeometry.HIVE, frame);
+        assertTrue("look " + l.pose, hive.distanceTo(new Point(l.pose.x(), l.pose.y())) >= margin);
+        assertEquals(CollectConfig.LOOK_DISTANCE_IN, Math.hypot(110 - l.pose.x(), 70 - l.pose.y()), 1e-6);
+        assertEquals(0, Angles.wrap(Math.atan2(70 - l.pose.y(), 110 - l.pose.x()) - l.pose.heading()), 1e-6);
     }
 
     @Test

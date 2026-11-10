@@ -20,10 +20,16 @@ CollectCommand collect = new CollectCommand(camera, tracking, new PedroPathFollo
         intakeStatus, CollectRequest.builder(Alliance.RED, true).build(), Collections.emptyList());
 collect.then(camera.modeCommand(CameraMode.GOAL) /* , your score command */).schedule();
 
-// TeleOp: hold-to-collect. Pass a requirement shared with your drive command (e.g. the drivetrain
-// subsystem) so collect and the TeleOp drive never fight over the follower.
-new CollectCommand(camera, tracking, pathFollower, intakeStatus, request, obstacles, drivetrain)
-        .asTeleopAssist(() -> gamepad1.right_bumper, () -> stickMagnitude).schedule();
+// TeleOp: hold-to-collect. asTeleopAssist() only adds the cancel condition (bumper released or a
+// stick moved); it does not watch the bumper for you. So run this block on each bumper RISING EDGE,
+// building a fresh CollectCommand per press (a command instance is one run), exactly as
+// opmodes/CollectTest.onUpdate() does. Pass a requirement shared with your drive command (e.g. the
+// drivetrain subsystem) so collect and the TeleOp drive never fight over the follower.
+if (gamepad1.right_bumper && !lastBumper) {
+    new CollectCommand(camera, tracking, pathFollower, intakeStatus, request, obstacles, drivetrain)
+            .asTeleopAssist(() -> gamepad1.right_bumper, () -> stickMagnitude).schedule();
+}
+lastBumper = gamepad1.right_bumper;
 ```
 
 ## Strategy knobs (CollectRequest)
@@ -40,8 +46,12 @@ Set `BALL_PITCH_DOWN_DEG`, `TILT_*_POS` and settle times from the prelim bench b
 
 - The map uses the tight gate when either the sighting or the ball is precise, so far, blurry sightings can't absorb a nearby ball.
 - "In view but unseen" misses must be consecutive; one dropped detector frame never removes a ball.
-- A ball hidden behind a nearer ball seen in the same frame (within atan2(diameter, range to the nearer ball) of its bearing) neither counts a miss nor resets it, so two balls in line are never deleted for being merged into one detection.
+- A ball hidden behind a nearer ball (within atan2(diameter, range to the nearer ball) of its bearing) neither counts a miss nor resets it, so two balls in line are never deleted for being merged into one detection. The occluder can be a sighting in this frame or a confirmed map ball of any class seen within `OCCLUDER_RECENT_MS` (colour pipelines can't see other colours).
+- A "maybe two" flag is only cleared by a sighting at least as sharp as the one that set it, so a blurry view can never turn two balls into one.
 - Frames are settled by capture time, not poll time; a repeat poll of a rejected result keeps its reason.
+- A frame waits (POSE_PENDING, up to `POSE_WAIT_MAX_MS`) until the pose history covers its capture time, and ball frames captured before the turret became ready are rejected.
+- In AUTO the opponent-half barrier is always an obstacle while the robot is on its own half, even when the robot is outside the chosen zone preset. Look poses are kept clear of field obstacles.
+- A search spot counts as visited only after the robot has dwelt there facing it; recovery re-plans on the way go back to the same spot. If the robot is already there but facing away it turns in place (`LOOK_HEADING_TOL_DEG`, `LOOK_TURN_TIMEOUT_MS`).
 - Misses only count for classes the frame's pipeline can see, so a colour pipeline never removes balls of the other colour.
 - The map prunes stale balls before associating new sightings.
 - At a ball, `PICKUP_GRACE_MS` suppresses PATH_DONE, BETTER_BALL and stall re-plans while the pickup lands (the robot is not held; pose jumps and other events still re-plan). A ball missed twice is skipped.

@@ -1,0 +1,32 @@
+name: Unit tests
+
+# Runs the laptop JUnit tests (plain-Java perception/collect logic) and a
+# TeamCode compile on every PR, whatever its base, so stacked PRs get checked too.
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'     # Gradle 9.1 / AGP 8.13 need JDK 17+
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile TeamCode and run unit tests
+        # The runner image ships the Android SDK and sets ANDROID_HOME.
+        run: ./gradlew :TeamCode:compileDebugJavaWithJavac :TeamCode:testDebugUnitTest --no-daemon
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            TeamCode/build/test-results/testDebugUnitTest/
+            TeamCode/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore

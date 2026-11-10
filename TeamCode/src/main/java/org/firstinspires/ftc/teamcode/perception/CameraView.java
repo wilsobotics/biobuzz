@@ -16,10 +16,21 @@ public final class CameraView {
         if (r > maxRange || r < 1e-6) {
             return false;
         }
-        double bearingDeg = Math.toDegrees(Angles.wrap(Math.atan2(dy, dx) - m.camYaw(robot)));
-        double txDeg = -bearingDeg;
-        double depressionDeg = Math.toDegrees(Math.atan2(m.heightIn - ballH, r));
-        double tyDeg = m.pitchDownDeg - depressionDeg;
+        // Exact inverse of BallProjector.project. World -> robot frame (fwd, left, up) by -camYaw.
+        double yaw = m.camYaw(robot);
+        double fwd = dx * Math.cos(yaw) + dy * Math.sin(yaw);
+        double left = -dx * Math.sin(yaw) + dy * Math.cos(yaw);
+        double up = ballH - m.heightIn;
+        // Undo the pitch: fwd = zc cos p + yc sin p, up = -zc sin p + yc cos p.
+        double p = Math.toRadians(m.pitchDownDeg);
+        double zc = fwd * Math.cos(p) - up * Math.sin(p);
+        double yc = fwd * Math.sin(p) + up * Math.cos(p);
+        double xc = -left;
+        if (zc <= 1e-9) {
+            return false; // behind the image plane
+        }
+        double txDeg = Math.toDegrees(Math.atan(xc / zc));
+        double tyDeg = Math.toDegrees(Math.atan(yc / zc));
         double margin = PerceptionConfig.EDGE_MARGIN_DEG;
         return Math.abs(txDeg) <= m.hfovDeg / 2 - margin && Math.abs(tyDeg) <= m.vfovDeg / 2 - margin;
     }

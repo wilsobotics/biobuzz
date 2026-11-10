@@ -41,6 +41,10 @@ hints on/off, max targets, timeout, end-when-full. AUTO always keeps to our half
 
 All values are in `PerceptionConfig` and `CollectConfig`, live in FTC Dashboard (192.168.43.1:8080/dash).
 Set `BALL_PITCH_DOWN_DEG`, `TILT_*_POS` and settle times from the prelim bench before trusting positions.
+The bench is the **Limelight Prelim Bench** TeleOp (`opmodes/LimelightPrelimBench.java`): it moves the tilt
+servo, shows the measured distance of each ball, times ball/goal switches (use the median for `MODE_SETTLE_MS`),
+saves setpoints into `PerceptionConfig` with X (live until the app restarts, so copy the logged `SAVE` values
+into `PerceptionConfig.java`), and logs everything to `FIRST/perception/prelim_*.csv` on the Control Hub.
 
 ## Behaviour notes
 

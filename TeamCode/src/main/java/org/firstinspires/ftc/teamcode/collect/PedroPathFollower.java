@@ -17,4 +17,5 @@ public final class PedroPathFollower implements PathFollower {
     @Override public Pose pose() { return follower.pose(); }
     @Override public Pose closestPose() { return follower.following() ? follower.closestPose() : null; }
     @Override public void stop() { follower.stop(); }
+    @Override public void hold(Pose pose) { follower.hold(pose); }
 }

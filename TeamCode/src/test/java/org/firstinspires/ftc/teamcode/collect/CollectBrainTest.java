@@ -21,6 +21,8 @@ public class CollectBrainTest {
         boolean instant;   // follow() leaves the path already done
         boolean stopped;
         int follows;
+        int holds;
+        Pose held;
 
         FakeFollower(Pose pose) {
             this.pose = pose;
@@ -31,6 +33,7 @@ public class CollectBrainTest {
         @Override public Pose pose() { return pose; }
         @Override public Pose closestPose() { return pose; }
         @Override public void stop() { busy = false; stopped = true; }
+        @Override public void hold(Pose p) { busy = false; stopped = false; holds++; held = p; }
         void finish() { busy = false; }
     }
 
@@ -98,6 +101,7 @@ public class CollectBrainTest {
         b.update(t0);
         assertEquals(1, follower.follows);
         assertFalse(b.isDone());
+        follower.pose = new Pose(20, 20, Math.PI);   // path ended facing the look heading
         follower.finish();
         b.update(t0 + 100);
         assertFalse(b.isDone());          // dwelling at the look pose
@@ -289,5 +293,113 @@ public class CollectBrainTest {
         b.update(100 + CollectConfig.UNREACHABLE_RETRY_MS + 50);
         assertEquals(2, b.replanCount());        // retried once the hold ran out
         assertFalse(b.isDone());
+    }
+    // LOADING_ZONE_RED look pose (frame rotation 0): (36, 108), heading 180 deg.
+    private static final double LOOK_X = 36, LOOK_Y = 108;
+
+    @Test
+    public void recoveryReplanKeepsTheActiveLookUntilItIsDwelt() {
+        CollectBrain b = brain(quiet().onlySources("LOADING_ZONE_RED").build());
+        b.start(100);
+        long t0 = 100 + CollectConfig.START_DWELL_MS;
+        b.update(t0);
+        assertEquals("LOOK", b.state());
+        assertEquals(1, follower.follows);
+        follower.pose = new Pose(20, 40, 0);       // relocalised mid-drive: 20 in in 20 ms
+        b.update(t0 + 20);
+        assertEquals(ReplanPolicy.Reason.POSE_JUMP, b.lastReason());
+        assertFalse("the source was never checked", b.isDone());
+        assertEquals("LOOK", b.state());
+        assertEquals(2, follower.follows);          // a new path to the same look
+        follower.pose = new Pose(LOOK_X, LOOK_Y, Math.PI);
+        follower.finish();
+        long t1 = t0 + 3000;                        // slow drive, not a jump
+        b.update(t1);
+        assertFalse(b.isDone());                    // dwelling
+        b.update(t1 + CollectConfig.LOOK_DWELL_MS - 50);
+        assertFalse(b.isDone());
+        b.update(t1 + CollectConfig.LOOK_DWELL_MS + 50);
+        assertEquals(CollectResult.NO_TARGETS, b.result());
+    }
+
+    @Test
+    public void alreadyAtTheLookPointButFacingAwayTurnsBeforeDwelling() {
+        follower.pose = new Pose(LOOK_X, LOOK_Y, 0);   // 180 deg off the look heading
+        CollectBrain b = brain(quiet().onlySources("LOADING_ZONE_RED").build());
+        b.start(100);
+        long t0 = 100 + CollectConfig.START_DWELL_MS;
+        b.update(t0);
+        assertEquals("LOOK", b.state());
+        assertEquals(0, follower.follows);
+        assertEquals(1, follower.holds);
+        assertEquals(LOOK_X, follower.held.x(), 1e-6);
+        assertEquals(LOOK_Y, follower.held.y(), 1e-6);
+        assertEquals(Math.PI, Math.abs(follower.held.heading()), 1e-6);
+        b.update(t0 + CollectConfig.LOOK_DWELL_MS + 100);
+        assertFalse("dwelt while facing away", b.isDone());
+        follower.pose = new Pose(LOOK_X, LOOK_Y, Math.toRadians(175));
+        long t1 = t0 + 600;                          // inside the turn timeout
+        b.update(t1);
+        assertFalse(b.isDone());                     // dwell starts now
+        b.update(t1 + CollectConfig.LOOK_DWELL_MS - 50);
+        assertFalse(b.isDone());
+        b.update(t1 + CollectConfig.LOOK_DWELL_MS + 50);
+        assertEquals(CollectResult.NO_TARGETS, b.result());
+    }
+
+    @Test
+    public void lookTurnGivesUpAndDwellsAfterTheTimeout() {
+        follower.pose = new Pose(LOOK_X, LOOK_Y, 0);
+        CollectBrain b = brain(quiet().onlySources("LOADING_ZONE_RED").build());
+        b.start(100);
+        long t0 = 100 + CollectConfig.START_DWELL_MS;
+        b.update(t0);
+        assertEquals(1, follower.holds);
+        b.update(t0 + CollectConfig.LOOK_TURN_TIMEOUT_MS - 50);
+        assertFalse(b.isDone());
+        long t1 = t0 + CollectConfig.LOOK_TURN_TIMEOUT_MS;
+        b.update(t1);                                // timed out: dwell starts
+        assertFalse(b.isDone());
+        b.update(t1 + CollectConfig.LOOK_DWELL_MS + 50);
+        assertEquals(CollectResult.NO_TARGETS, b.result());
+    }
+
+    @Test
+    public void lookPathEndingFacingAwayTurnsBeforeDwelling() {
+        CollectBrain b = brain(quiet().onlySources("LOADING_ZONE_RED").build());
+        b.start(100);
+        long t0 = 100 + CollectConfig.START_DWELL_MS;
+        b.update(t0);
+        assertEquals(1, follower.follows);
+        follower.finish();                           // path done, still heading 0
+        b.update(t0 + 100);
+        assertEquals(1, follower.holds);
+        b.update(t0 + 100 + CollectConfig.LOOK_DWELL_MS + 50);
+        assertFalse("dwelt while facing away", b.isDone());
+        follower.pose = new Pose(20, 20, Math.PI);
+        b.update(t0 + 700);
+        b.update(t0 + 700 + CollectConfig.LOOK_DWELL_MS + 50);
+        assertEquals(CollectResult.NO_TARGETS, b.result());
+    }
+
+    @Test
+    public void maybeTwoTargetStaysPlannedAfterItsFirstPickup() {
+        MapSeeds.maybeTwo(map, BallClass.POLLEN, 40.0, 20.0);
+        CollectBrain b = brain(quiet().build());
+        b.start(100);
+        assertEquals(1, b.plannedTargets().size());
+        follower.pose = new Pose(40 - 14.3, 20, 0);  // intake mouth on the ball
+        b.update(400);
+        follower.finish();                           // path ends at the ball
+        intake.count = 1;
+        b.update(500);
+        assertEquals("still planned", 1, b.plannedTargets().size());
+        assertEquals("waits for the second ball, no re-plan", 1, b.replanCount());
+        assertEquals("TARGETS", b.state());
+        b.update(700);
+        assertEquals(1, b.replanCount());            // still inside the pickup grace
+        intake.count = 2;
+        b.update(800);
+        assertTrue(b.plannedTargets().isEmpty());
     }
 }

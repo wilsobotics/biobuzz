@@ -65,4 +65,27 @@ public class SightingTest {
         assertFalse(CameraView.canSee(ORIGIN, M, 40, 30, 1.4, 60));  // left of the frame
         assertFalse(CameraView.canSee(ORIGIN, M, 70, 0, 1.4, 60));   // beyond maxRange
     }
+    @Test
+    public void cameraViewIsTheExactInverseOfTheProjector() {
+        double big = 1e6;
+        double hLim = M.hfovDeg / 2 - PerceptionConfig.EDGE_MARGIN_DEG;  // 23.25
+        double vLim = M.vfovDeg / 2 - PerceptionConfig.EDGE_MARGIN_DEG;  // 17
+        double[] txs = {-22, -10, 0, 10, 22, -hLim + 0.25, hLim - 0.25};
+        double[] tys = {-16, -8, 0, 8, 16, -vLim + 0.25, vLim - 0.25};
+        for (double tx : txs) {
+            for (double ty : tys) {
+                double[] p = BallProjector.project(ORIGIN, M, tx, ty, 1.4);
+                assertTrue("projects tx=" + tx + " ty=" + ty, p != null);
+                assertTrue("inside tx=" + tx + " ty=" + ty, CameraView.canSee(ORIGIN, M, p[0], p[1], 1.4, big));
+            }
+        }
+        double[][] outside = {
+                {26, 0}, {-26, 0}, {hLim + 0.25, 0}, {-hLim - 0.25, 16}, {hLim + 0.25, -16},
+                {0, vLim + 0.25}, {0, -vLim - 0.25}, {22, vLim + 0.25}, {-22, -vLim - 0.25}, {22, -18}, {-26, 16}};
+        for (double[] o : outside) {
+            double[] p = BallProjector.project(ORIGIN, M, o[0], o[1], 1.4);
+            assertTrue("projects tx=" + o[0] + " ty=" + o[1], p != null);
+            assertFalse("outside tx=" + o[0] + " ty=" + o[1], CameraView.canSee(ORIGIN, M, p[0], p[1], 1.4, big));
+        }
+    }
 }

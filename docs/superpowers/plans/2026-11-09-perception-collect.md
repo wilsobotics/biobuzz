@@ -1,5 +1,20 @@
 # Ball Perception + Weaver Collect Implementation Plan
 
+> **Historical recipe.** This is the plan the code was built from (2026-11-09). Task and whole-branch reviews, then PR review, changed several behaviours. The code in `TeamCode/.../perception` and `.../collect`, its tests, and the spec are the source of truth; where this plan's example code differs, the code wins. Main differences:
+> - **Ball map:** tight gate when either side is precise; consecutive, per-class, occlusion-aware misses; prune first.
+> - **Frame gate:** settle time is judged by capture time; frames wait for a bracketing pose; turret readiness is checked at capture time.
+> - **Pose timestamps:** `recordPose()` is called after `follower.update()`.
+> - **Collect brain:**
+>   - waits out the pickup grace period;
+>   - holds unreachable targets for a retry interval;
+>   - dwells at start;
+>   - detects pose jumps by speed and puts a minimum interval on PATH_DONE re-plans;
+>   - only treats a heading error as off-path once it persists;
+>   - visits each look once after dwelling there, facing it.
+> - **Planner:** capacity-safe target choice; the AUTO half barrier is always on; look poses stay clear of obstacles.
+> - **Defaults:** pollen only by default (`COLLECT_NECTAR`).
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn Limelight 3A ball detections into a field-frame ball map and a NextFTC collect command that plans with Marrow Weaver and drives with Pedro Pathing 3, in auto and as a TeleOp hold-to-collect assist.

@@ -165,6 +165,18 @@ hold expires and re-plans, rather than ending.
 **Ending.** FULL when `IntakeStatus.isFull()`; NO_TARGETS only after the hints and the ball-source
 checks find nothing and no unreachable hold is pending; TIMEOUT; INTERRUPTED on cancel. On end the follower is stopped (breakFollowing).
 
+**PR review hardening (2026-11-10).** Fixes made after review of the PRs:
+- **Occlusion:** a ball is also shielded by a nearer confirmed map ball of any class seen within `OCCLUDER_RECENT_MS`, because colour pipelines can't see other colours.
+- **"Maybe two" flag:** it is only cleared by a sighting at least as sharp as the one that set it (the bar never rises).
+- **Camera view check:** `CameraView` is the exact inverse of the projector, so pitched and off-axis points are handled.
+- **Frame pose:** a frame waits (POSE_PENDING, at most `POSE_WAIT_MAX_MS`) until the pose history covers its capture time.
+- **Turret:** ball frames captured before the turret became ready are rejected.
+- **AUTO barrier:** the opponent-half barrier stays an obstacle whenever the robot is on its own half, independent of the zone preset.
+- **Target budget:** targets never exceed the capacity budget. A lone "maybe two" is still allowed when nothing else fits.
+- **Look poses:** they are kept clear of field obstacles, with other standoff angles tried around the hint.
+- **Search spots:** one counts as visited only after the dwell. Recovery re-plans return to it. The robot turns in place to face it if needed.
+- **Planned "maybe two" target:** it stays planned until its id leaves the map.
+
 ## 6. Testing
 
 - Laptop unit tests (any test dependencies are fine: JUnit 4 + Marrow on the test classpath) for `PoseHistory`, `BallProjector` (against `BallMath` reference values), `BallMap`, `ReplanPolicy`, `CollectBrain`, `CollectPlanner` (with real Weaver), `FrameGate`, zone filtering.

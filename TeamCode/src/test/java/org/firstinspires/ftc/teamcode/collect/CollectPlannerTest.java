@@ -1,10 +1,13 @@
 package org.firstinspires.ftc.teamcode.collect;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import com.pedropathing.math.Pose;
+import com.skeletonarmy.marrow.zones.Point;
+import com.skeletonarmy.marrow.zones.Zone;
 
 import org.firstinspires.ftc.teamcode.perception.Angles;
 import org.firstinspires.ftc.teamcode.perception.BallClass;
@@ -53,12 +56,54 @@ public class CollectPlannerTest {
         assertEquals(40, t.get(0).x(), 0.5);
     }
 
+    private static int cost(List<MapBall> t) {
+        int c = 0;
+        for (MapBall b : t) {
+            c += b.maybeTwo() ? 2 : 1;
+        }
+        return c;
+    }
+
     @Test
-    public void capacityAndMaybeTwoLimitTheList() {
+    public void totalCostNeverExceedsTheBudget() {
         MapSeeds.maybeTwo(map, BallClass.POLLEN, 30.0, 20.0);
         MapSeeds.confirmed(map, BallClass.POLLEN, 40.0, 20.0, BallClass.POLLEN, 45.0, 30.0);
-        assertEquals(2, choose(CollectRequest.builder(Alliance.RED, false).build(), 3, none).size());
-        assertEquals(1, choose(CollectRequest.builder(Alliance.RED, false).maxTargets(1).build(), 3, none).size());
+        List<MapBall> three = choose(CollectRequest.builder(Alliance.RED, false).build(), 3, none);
+        assertEquals(2, three.size());
+        assertTrue(cost(three) <= 3);
+        List<MapBall> one = choose(CollectRequest.builder(Alliance.RED, false).maxTargets(1).build(), 3, none);
+        assertEquals(1, one.size());
+        assertTrue(cost(one) <= 1);
+    }
+
+    @Test
+    public void budgetOnePrefersAFurtherSingleOverANearMaybeTwo() {
+        MapSeeds.maybeTwo(map, BallClass.POLLEN, 30.0, 20.0);
+        MapSeeds.confirmed(map, BallClass.POLLEN, 50.0, 20.0);
+        List<MapBall> t = choose(CollectRequest.builder(Alliance.RED, false).build(), 1, none);
+        assertEquals(1, t.size());
+        assertFalse(t.get(0).maybeTwo());
+        assertEquals(50, t.get(0).x(), 0.5);
+    }
+
+    @Test
+    public void budgetOneStillTakesALoneMaybeTwo() {
+        MapSeeds.maybeTwo(map, BallClass.POLLEN, 30.0, 20.0);
+        List<MapBall> t = choose(CollectRequest.builder(Alliance.RED, false).build(), 1, none);
+        assertEquals(1, t.size());
+        assertTrue(t.get(0).maybeTwo());
+    }
+
+    @Test
+    public void aMaybeTwoThatWouldOverrunTheBudgetIsLeftOut() {
+        MapSeeds.confirmed(map, BallClass.POLLEN, 30.0, 20.0, BallClass.POLLEN, 40.0, 20.0);
+        MapSeeds.maybeTwo(map, BallClass.POLLEN, 50.0, 20.0);
+        List<MapBall> t = choose(CollectRequest.builder(Alliance.RED, false).build(), 3, none);
+        assertEquals(2, t.size());
+        assertEquals(2, cost(t));
+        for (MapBall b : t) {
+            assertFalse(b.maybeTwo());
+        }
     }
 
     @Test
@@ -102,13 +147,36 @@ public class CollectPlannerTest {
         assertTrue(p.targets.isEmpty());
     }
 
+    private static boolean anyContains(List<Zone> zones, double x, double y) {
+        for (Zone z : zones) {
+            if (z.contains(new Point(x, y))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Test
-    public void obstaclesIncludeOutsideBandsOnlyWhenTheRobotIsInside() {
+    public void autoBarrierOnlyWhileOnOurHalf() {
         CollectRequest req = CollectRequest.builder(Alliance.RED, true).build();
         AllowedArea area = new AllowedArea(req, frame);
         List<ObstacleProvider> none = Collections.<ObstacleProvider>emptyList();
-        assertEquals(6, planner.obstacles(robot, area, none).size());
-        assertEquals(5, planner.obstacles(new Pose(100, 20, 0), area, none).size());
+        List<Zone> inside = planner.obstacles(robot, area, none);
+        assertEquals(6, inside.size());                      // 5 static + the opponent-half barrier
+        assertTrue(anyContains(inside, 100, 20));
+        List<Zone> across = planner.obstacles(new Pose(100, 20, 0), area, none);
+        assertEquals(5, across.size());                      // no barrier: it must be able to drive home
+        assertFalse(anyContains(across, 100, 20));
+    }
+
+    @Test
+    public void autoBarrierStaysWhenTheRobotIsOutsideThePreset() {
+        // RED AUTO NEAR_HALF: (20,108) is our half but outside the preset; the barrier must remain
+        CollectRequest req = CollectRequest.builder(Alliance.RED, true).zone(ZonePreset.NEAR_HALF).build();
+        AllowedArea area = new AllowedArea(req, frame);
+        List<Zone> z = planner.obstacles(new Pose(20, 108, 0), area, Collections.<ObstacleProvider>emptyList());
+        assertTrue(anyContains(z, 100, 108));
+        assertFalse(anyContains(z, 20, 108));                // no preset bands round a robot outside the preset
     }
 
     @Test

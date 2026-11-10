@@ -13,8 +13,9 @@ import java.util.Set;
 /**
  * Field-frame ball map. Data association is one-to-one per frame: each sighting updates at
  * most one ball and each ball takes at most one sighting, so two balls are never merged.
- * A ball in view but not seen only counts a miss when no nearer ball seen this frame could be
- * hiding it, so a ball occluded by another is never deleted for being "missing".
+ * A ball in view but not seen only counts a miss when no nearer ball could be hiding it: neither
+ * a sighting of this frame nor a recently seen confirmed map ball of any class (colour pipelines
+ * only report one class per frame). A ball occluded by another is never deleted for being "missing".
  *
  * <p>Meant to be used from the robot loop thread. The MapBall objects it returns are live
  * views of the map, so callers must not hold them across loops expecting a frozen snapshot.
@@ -85,7 +86,8 @@ public final class BallMap {
                 }
                 if (CameraView.canSee(robot, mount, b.x, b.y, b.ballClass().centerHeightIn(),
                         PerceptionConfig.VIEW_REMOVE_RANGE_IN)) {
-                    if (hiddenBehindSighting(robot, mount, b, sightings)) {
+                    if (hiddenBehindSighting(robot, mount, b, sightings)
+                            || hiddenBehindMapBall(robot, mount, b, nowMs)) {
                         continue; // may be hidden behind a nearer ball: no evidence either way
                     }
                     b.missFrames++;
@@ -119,16 +121,43 @@ public final class BallMap {
         double range = Math.hypot(b.x - cx, b.y - cy);
         double bearing = Math.atan2(b.y - cy, b.x - cx);
         for (Sighting s : sightings) {
-            double sr = Math.hypot(s.x - cx, s.y - cy);
-            if (sr >= range || sr < 1e-6) {
-                continue;
-            }
-            double width = Math.atan2(s.ballClass.diameterIn, sr);
-            if (Math.abs(Angles.wrap(Math.atan2(s.y - cy, s.x - cx) - bearing)) <= width) {
+            if (occludes(cx, cy, range, bearing, s.x, s.y, s.ballClass.diameterIn)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * True when a confirmed map ball of any class, seen within OCCLUDER_RECENT_MS, sits nearer the
+     * camera on b's bearing. Covers colour-pipeline cycling, where the nearer ball's class cannot
+     * appear in this frame's sightings at all.
+     */
+    private boolean hiddenBehindMapBall(Pose robot, CameraMount mount, MapBall b, long nowMs) {
+        double cx = mount.camX(robot);
+        double cy = mount.camY(robot);
+        double range = Math.hypot(b.x - cx, b.y - cy);
+        double bearing = Math.atan2(b.y - cy, b.x - cx);
+        for (MapBall o : balls) {
+            if (o == b || !o.isConfirmed() || nowMs - o.lastSeenMs > PerceptionConfig.OCCLUDER_RECENT_MS) {
+                continue;
+            }
+            if (occludes(cx, cy, range, bearing, o.x, o.y, o.ballClass().diameterIn)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A ball of diameter d at (ox, oy) is nearer than range and within its angular width of bearing. */
+    private static boolean occludes(double cx, double cy, double range, double bearing,
+                                    double ox, double oy, double d) {
+        double or = Math.hypot(ox - cx, oy - cy);
+        if (or >= range || or < 1e-6) {
+            return false;
+        }
+        double width = Math.atan2(d, or);
+        return Math.abs(Angles.wrap(Math.atan2(oy - cy, ox - cx) - bearing)) <= width;
     }
 
     /** Tight gate (below one ball diameter) when either side is precise; wide only when both are not. */
@@ -143,7 +172,10 @@ public final class BallMap {
     }
 
     private static void fuse(MapBall b, Sighting s, long nowMs) {
-        boolean sharper = s.sigma <= b.sigma;
+        // Compare with the sighting that last set the shape flag, not the fused sigma: fusing
+        // shrinks b.sigma, which would otherwise freeze maybeTwo against equal-resolution views.
+        double shapeS = Math.max(PerceptionConfig.MIN_SIGMA_IN, s.sigma);
+        boolean sharper = shapeS <= b.shapeSigma * PerceptionConfig.SHAPE_SIGMA_SLACK;
         double wb = 1.0 / (b.sigma * b.sigma);
         double sSigma = Math.max(PerceptionConfig.MIN_SIGMA_IN, s.sigma); // sigma 0 would give infinite weight
         double ws = 1.0 / (sSigma * sSigma);
@@ -153,6 +185,7 @@ public final class BallMap {
         b.quality = Math.max(b.quality, s.quality);
         if (sharper) {
             b.maybeTwo = s.maybeTwo;
+            b.shapeSigma = Math.min(b.shapeSigma, shapeS); // the bar never creeps upward
         }
         b.seenCount++;
         b.lastSeenMs = nowMs;

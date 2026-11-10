@@ -45,6 +45,17 @@ public class PoseHistoryTest {
     }
 
     @Test
+    public void newestTimeTracksTheLatestSample() {
+        PoseHistory h = new PoseHistory(500);
+        assertEquals(Long.MIN_VALUE, h.newestTime());
+        h.add(0, new Pose(0, 0, 0));
+        h.add(100, new Pose(10, 0, 0));
+        assertEquals(100, h.newestTime());
+        h.add(50, new Pose(5, 0, 0)); // out of order: ignored
+        assertEquals(100, h.newestTime());
+    }
+
+    @Test
     public void emptyHistoryIsNull() {
         assertNull(new PoseHistory(500).at(0));
     }

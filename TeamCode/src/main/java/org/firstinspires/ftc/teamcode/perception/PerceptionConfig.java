@@ -22,6 +22,8 @@ public final class PerceptionConfig {
     public static long PIPELINE_SETTLE_MS = 100;         // pipeline switch only (colour cycling)
     public static long MAX_STALENESS_MS = 150;
     public static long POSE_HISTORY_MS = 500;
+    /** Max wait for a pose newer than a frame's capture time before using the newest pose anyway. */
+    public static long POSE_WAIT_MAX_MS = 100;
 
     // mount (from CAD at turret 0 deg; update when the mount is final)
     public static double CAM_FORWARD_IN = 0.0;

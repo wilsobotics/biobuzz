@@ -23,12 +23,8 @@ public final class CameraSubsystem implements Subsystem {
     private Limelight3A limelight;
     private Servo tilt;
     private PoseSource poseSource;
-    private BooleanSupplier turretOk = new BooleanSupplier() {
-        @Override
-        public boolean getAsBoolean() {
-            return true;
-        }
-    };
+    private BooleanSupplier turretOk;          // null = no turret check, always ready
+    private long turretReadySinceMs = FrameGate.TURRET_NOT_READY;
     private final PoseHistory poses = new PoseHistory(PerceptionConfig.POSE_HISTORY_MS);
     private final FrameGate gate = new FrameGate();
     private PipelineCycle cycle;
@@ -55,9 +51,13 @@ public final class CameraSubsystem implements Subsystem {
         poses.add(tMs, pose);
     }
 
-    /** Optional: return false when the turret is not at the ball-mode angle. */
+    /**
+     * Optional: return false when the turret is not at the ball-mode angle. Evaluated every
+     * periodic(); a ball frame passes only if it was captured after the check last became true.
+     */
     public void setTurretCheck(BooleanSupplier check) {
         this.turretOk = check;
+        turretReadySinceMs = FrameGate.TURRET_NOT_READY;
     }
 
     @Override
@@ -107,13 +107,14 @@ public final class CameraSubsystem implements Subsystem {
         if (poseSource != null && !externalPoses) {
             poses.add(now, poseSource.pose());
         }
+        updateTurretReady(now);
         LLResult r = limelight.getLatestResult();
         latestRaw = r;
         if (r == null) {
             return;
         }
         PipelineSpec spec = mode == CameraMode.BALL ? cycle.current() : null;
-        CameraFrame f = gate.accept(toRaw(r), now, mode, spec, poses, turretOk.getAsBoolean());
+        CameraFrame f = gate.accept(toRaw(r), now, mode, spec, poses, turretReadySinceMs);
         if (f == null) {
             return;
         }
@@ -122,6 +123,17 @@ public final class CameraSubsystem implements Subsystem {
             PipelineSpec next = cycle.advance();
             limelight.pipelineSwitch(next.index);
             gate.expect(next.index, now, PerceptionConfig.PIPELINE_SETTLE_MS);
+        }
+    }
+
+    /** Tracks when the turret check last became true (TURRET_NOT_READY while it is false). */
+    private void updateTurretReady(long now) {
+        if (turretOk == null) {
+            turretReadySinceMs = Long.MIN_VALUE; // no turret: every capture is after "ready"
+        } else if (!turretOk.getAsBoolean()) {
+            turretReadySinceMs = FrameGate.TURRET_NOT_READY;
+        } else if (turretReadySinceMs == FrameGate.TURRET_NOT_READY) {
+            turretReadySinceMs = now;
         }
     }
 

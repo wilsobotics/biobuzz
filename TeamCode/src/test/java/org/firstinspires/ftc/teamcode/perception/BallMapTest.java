@@ -267,4 +267,25 @@ public class BallMapTest {
         assertEquals(1, map.size());
         assertFalse(map.all().get(0).maybeTwo());
     }
+    @Test
+    public void blurrierSightingsNeverRaiseTheShapeBar() {
+        BallMap map = new BallMap();
+        map.update(0, null, null, list(new Sighting(BallClass.POLLEN, 40, 0, 40, 1.0, 0.9, true)));
+        map.update(50, null, null, list(new Sighting(BallClass.POLLEN, 40, 0, 40, 1.0, 0.9, true)));
+        assertTrue(map.all().get(0).maybeTwo());
+        // each sighting 20% blurrier than the last: within the slack of its predecessor, but the
+        // bar must stay at the sharpest view (sigma 1), so none of them may raise it
+        double sigma = 1.0;
+        long t = 100;
+        for (int k = 0; k < 3; k++, t += 50) {
+            sigma *= 1.2; // 1.2, 1.44, 1.728
+            map.update(t, null, null, list(new Sighting(BallClass.POLLEN, 40, 0, 40, sigma, 0.9, true)));
+        }
+        for (int k = 0; k < 3; k++, t += 50) {
+            sigma *= 1.2; // 2.07, 2.49, 2.99: all blurrier than 1.25 x the sharpest view
+            map.update(t, null, null, list(new Sighting(BallClass.POLLEN, 40, 0, 40, sigma, 0.9, false)));
+            assertEquals(1, map.size());
+            assertTrue("sigma " + sigma, map.all().get(0).maybeTwo());
+        }
+    }
 }

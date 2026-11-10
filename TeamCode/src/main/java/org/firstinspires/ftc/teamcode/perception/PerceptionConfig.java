@@ -56,7 +56,7 @@ public final class PerceptionConfig {
     public static double VIEW_REMOVE_RANGE_IN = 60.0;
     /** A confirmed map ball (any class) seen within this long can hide a farther ball behind it. */
     public static long OCCLUDER_RECENT_MS = 1000;
-    /** A sighting may reset maybeTwo when its sigma <= this x the sigma that last set the flag. */
+    /** A sighting may reset maybeTwo when its sigma <= this x the sharpest sigma that set the flag. */
     public static double SHAPE_SIGMA_SLACK = 1.25;
 
     // pickup bookkeeping

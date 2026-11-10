@@ -185,7 +185,7 @@ public final class BallMap {
         b.quality = Math.max(b.quality, s.quality);
         if (sharper) {
             b.maybeTwo = s.maybeTwo;
-            b.shapeSigma = shapeS;
+            b.shapeSigma = Math.min(b.shapeSigma, shapeS); // the bar never creeps upward
         }
         b.seenCount++;
         b.lastSeenMs = nowMs;

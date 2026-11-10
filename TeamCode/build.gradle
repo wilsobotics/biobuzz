@@ -26,4 +26,21 @@ android {
 
 dependencies {
     implementation project(':FtcRobotController')
+
+    // NextFTC command framework
+    implementation 'dev.nextftc:ftc:1.1.0'
+    implementation 'dev.nextftc:hardware:1.1.0'
+    // Pedro Pathing 3 (core + REV hub hardware). NextFTC's Pedro extension
+    // (1.0.0) targets Pedro 2, so it is deliberately not used.
+    implementation 'com.pedropathing:core:3.0.2'
+    implementation 'com.pedropathing:revhub:3.0.2'
+    // Marrow (Weaver path generation)
+    implementation 'com.skeletonarmyftc.marrow:core:1.2.5'
+    // FTC Dashboard (live tuning + field drawing). It depends on SDK 10,
+    // so the SDK group is excluded and our SDK 12 is used.
+    implementation('com.acmerobotics.dashboard:dashboard:0.6.0') {
+        exclude group: 'org.firstinspires.ftc'
+    }
+    // Laptop unit tests for the plain-Java perception/collect logic
+    testImplementation 'junit:junit:4.13.2'
 }

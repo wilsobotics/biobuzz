@@ -12,6 +12,8 @@ public final class MapBall {
     long lastSeenMs;
     int missFrames;
     boolean maybeTwo;
+    /** Sigma of the sighting that last set maybeTwo (not the fused sigma, which only shrinks). */
+    double shapeSigma;
 
     MapBall(int id, Sighting s, long nowMs) {
         this.id = id;
@@ -23,6 +25,7 @@ public final class MapBall {
         this.seenCount = 1;
         this.lastSeenMs = nowMs;
         this.maybeTwo = s.maybeTwo;
+        this.shapeSigma = Math.max(PerceptionConfig.MIN_SIGMA_IN, s.sigma);
     }
 
     public int id() { return id; }

@@ -38,6 +38,11 @@ public final class PoseHistory {
         }
     }
 
+    /** Time of the newest sample, or Long.MIN_VALUE when the history is empty. */
+    public synchronized long newestTime() {
+        return entries.isEmpty() ? Long.MIN_VALUE : entries.get(entries.size() - 1).t;
+    }
+
     /** Pose at tMs: interpolated inside the history, newest after it, null before it. */
     public synchronized Pose at(long tMs) {
         if (entries.isEmpty()) {

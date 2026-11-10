@@ -29,6 +29,10 @@ public final class CollectConfig {
     public static boolean COLLECT_NECTAR = false;  // v1 robot collects pollen only; true adds own-alliance nectar to the default targets
     public static double LOOK_DISTANCE_IN = 30;
     public static long LOOK_DWELL_MS = 400;
+    /** A look counts as reached only with the heading this close to the look heading. */
+    public static double LOOK_HEADING_TOL_DEG = 10;
+    /** Turning in place to the look heading gives up and dwells anyway after this long. */
+    public static long LOOK_TURN_TIMEOUT_MS = 800;
     /** After start, an empty map waits this long for targets before searching or giving up. */
     public static long START_DWELL_MS = 400;
     public static double STICK_CANCEL = 0.1;

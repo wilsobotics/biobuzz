@@ -44,6 +44,10 @@ public final class CollectBrain {
     private long startMs;
     private long nowMs;
     private long lookArrivedMs = -1;
+    /** When the turn in place to the look heading began, or -1 if not turning. */
+    private long lookTurnMs = -1;
+    /** The look being driven to or dwelt at; marked visited only once its dwell completes. */
+    private SearchPlanner.Look activeLook;
     private long waitUntilMs = -1;
     private long lastPoseMs;
     private long reachedMs = -1;
@@ -112,11 +116,22 @@ public final class CollectBrain {
                 && nowMs - reachedMs < CollectConfig.PICKUP_GRACE_MS;
         boolean pathDone = !follower.isBusy();
         if (state == State.LOOK && pathDone && !jump) {
-            if (lookArrivedMs < 0) {
-                lookArrivedMs = nowMs;
-            }
-            if (nowMs - lookArrivedMs < CollectConfig.LOOK_DWELL_MS && !hasTargets(pose)) {
-                return;
+            if (lookArrivedMs < 0 && !lookHeadingReached(pose, nowMs)) {
+                if (!hasTargets(pose)) {
+                    return;           // turning in place to the look heading
+                }
+            } else {
+                if (lookArrivedMs < 0) {
+                    lookArrivedMs = nowMs;
+                }
+                if (nowMs - lookArrivedMs < CollectConfig.LOOK_DWELL_MS) {
+                    if (!hasTargets(pose)) {
+                        return;
+                    }
+                } else if (activeLook != null) {
+                    visitedLooks.add(activeLook.key);   // dwelt: this look is checked
+                    activeLook = null;
+                }
             }
         }
 
@@ -159,12 +174,34 @@ public final class CollectBrain {
         finish(CollectResult.INTERRUPTED);
     }
 
+    private static boolean headingClose(Pose pose, Pose look) {
+        return Math.abs(Math.toDegrees(Angles.wrap(pose.heading() - look.heading())))
+                <= CollectConfig.LOOK_HEADING_TOL_DEG;
+    }
+
+    /**
+     * At the look point (path done, or already there): true once the heading is within
+     * LOOK_HEADING_TOL_DEG or the turn has run LOOK_TURN_TIMEOUT_MS. Otherwise starts (once)
+     * a hold at the look pose so the robot turns in place, and returns false.
+     */
+    private boolean lookHeadingReached(Pose pose, long nowMs) {
+        if (activeLook == null || headingClose(pose, activeLook.pose)) {
+            return true;
+        }
+        if (lookTurnMs < 0) {
+            lookTurnMs = nowMs;
+            follower.hold(activeLook.pose);
+        }
+        return nowMs - lookTurnMs >= CollectConfig.LOOK_TURN_TIMEOUT_MS;
+    }
+
     private void replan(long nowMs) {
         replanCount++;
         pendingUnexpected = false;
         pendingMissed = false;
         awaitingId = -1;
         lookArrivedMs = -1;
+        lookTurnMs = -1;
         Pose pose = follower.pose();
         if (req.endWhenFull && capacityLeft() <= 0) {
             finish(CollectResult.FULL);
@@ -185,17 +222,23 @@ public final class CollectBrain {
                 preview = p.preview;
                 follower.follow(p.path);
                 state = State.TARGETS;
+                activeLook = null;    // not dwelt: left unvisited so it can be checked later
                 return;
             }
         }
         planned = Collections.emptyList();
+        if (state != State.LOOK) {
+            activeLook = null;
+        }
         if (targets.isEmpty() && nowMs < startMs + CollectConfig.START_DWELL_MS) {
             // Just started on an empty map: give perception a moment before searching or giving up.
             waitUntil(startMs + CollectConfig.START_DWELL_MS);
             return;
         }
         while (true) {
-            SearchPlanner.Look look = search.nextLook(pose, map.hints(), req, area, visitedLooks);
+            // A recovery re-plan mid-look (jump, off path, stall) keeps going to the same look.
+            SearchPlanner.Look look = activeLook != null ? activeLook
+                    : search.nextLook(pose, map.hints(), req, area, visitedLooks);
             if (look == null) {
                 long hold = earliestPendingHold();
                 if (hold >= 0) {
@@ -205,11 +248,16 @@ public final class CollectBrain {
                 }
                 return;
             }
-            visitedLooks.add(look.key);
+            activeLook = look;
             state = State.LOOK;
             if (Math.hypot(look.pose.x() - pose.x(), look.pose.y() - pose.y()) < 3.0) {
-                follower.stop();
-                lookArrivedMs = nowMs;
+                preview = Collections.emptyList();
+                if (headingClose(pose, look.pose)) {
+                    follower.stop();
+                    lookArrivedMs = nowMs;
+                } else {
+                    lookHeadingReached(pose, nowMs);   // starts the turn in place
+                }
                 return;
             }
             CollectPlanner.Plan p = planner.planTo(pose, look.pose, obstacles);
@@ -218,6 +266,8 @@ public final class CollectBrain {
                 follower.follow(p.path);
                 return;
             }
+            visitedLooks.add(look.key);   // unreachable from here: don't retry it forever
+            activeLook = null;
         }
     }
 
@@ -256,9 +306,12 @@ public final class CollectBrain {
                 awaitingId = -1;
             }
             if (asPlanned) {
-                ArrayList<MapBall> rest = new ArrayList<MapBall>(planned);
-                rest.remove(expected);
-                planned = rest;
+                // a maybeTwo ball keeps its map entry after the first pickup: keep it planned
+                if (!map.contains(expected.id())) {
+                    ArrayList<MapBall> rest = new ArrayList<MapBall>(planned);
+                    rest.remove(expected);
+                    planned = rest;
+                }
             } else {
                 pendingUnexpected = true;
             }

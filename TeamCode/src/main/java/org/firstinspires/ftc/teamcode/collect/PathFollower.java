@@ -15,4 +15,7 @@ public interface PathFollower {
     Pose closestPose();
 
     void stop();
+
+    /** Hold the robot at a pose (turns in place when already there). Not busy while holding. */
+    void hold(Pose pose);
 }

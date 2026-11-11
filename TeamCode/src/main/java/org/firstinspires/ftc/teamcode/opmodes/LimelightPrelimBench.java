@@ -112,6 +112,11 @@ public class LimelightPrelimBench extends LinearOpMode {
             while (opModeIsActive()) {
                 handleButtons();
                 LLResult r = limelight.getLatestResult();
+                // After A/Y the Limelight can still hand back the old pipeline's frames for a moment:
+                // never log or show those under the new mode.
+                if (r != null && r.getPipelineIndex() != pipelineFor(mode)) {
+                    r = null;
+                }
                 boolean fresh = r != null && r.getControlHubTimeStamp() != lastResultStamp;
                 if (fresh) {
                     lastResultStamp = r.getControlHubTimeStamp();
@@ -293,11 +298,16 @@ public class LimelightPrelimBench extends LinearOpMode {
         return c == null ? BallClass.POLLEN : c;
     }
 
-    /** Floor position {forward, left, distance} from the point under the lens, or null above the horizon. */
+    /**
+     * Floor position {forward, left} from the robot centre and the camera's horizontal range, or null above
+     * the horizon. Same mount as CameraMount.fromConfig() (offsets, height, turret yaw, FOV), with only the
+     * pitch swapped for the bench's assumed value, so the readout matches the perception code.
+     */
     private double[] project(BallClass c, double txDeg, double tyDeg) {
-        CameraMount lensAtOrigin = new CameraMount(0, 0, PerceptionConfig.CAM_HEIGHT_IN,
-                pitchDeg[Mode.BALL.ordinal()], 0, PerceptionConfig.HFOV_DEG, PerceptionConfig.VFOV_DEG);
-        return BallProjector.project(new Pose(0, 0, 0), lensAtOrigin, txDeg, tyDeg, c.centerHeightIn());
+        CameraMount mount = new CameraMount(PerceptionConfig.CAM_FORWARD_IN, PerceptionConfig.CAM_LEFT_IN,
+                PerceptionConfig.CAM_HEIGHT_IN, pitchDeg[Mode.BALL.ordinal()], PerceptionConfig.TURRET_BALL_YAW_DEG,
+                PerceptionConfig.HFOV_DEG, PerceptionConfig.VFOV_DEG);
+        return BallProjector.project(new Pose(0, 0, 0), mount, txDeg, tyDeg, c.centerHeightIn());
     }
 
     private void show(LLResult r) {
@@ -307,7 +317,7 @@ public class LimelightPrelimBench extends LinearOpMode {
         telemetry.addData("Assumed pitch", "%.1f deg below horizontal (D-pad L/R)", pitchDeg[mode.ordinal()]);
         telemetry.addData("Lens height", "%.1f in (PerceptionConfig.CAM_HEIGHT_IN)", PerceptionConfig.CAM_HEIGHT_IN);
         if (r == null) {
-            telemetry.addLine("No Limelight result yet.");
+            telemetry.addLine("Waiting for a result from pipeline " + pipelineFor(mode) + ".");
         } else {
             telemetry.addData("Pipeline", "%d (%s)  stale %d ms  %d fps",
                     r.getPipelineIndex(), r.getPipelineType(), r.getStaleness(), recentStamps.size());
@@ -355,7 +365,7 @@ public class LimelightPrelimBench extends LinearOpMode {
         double[] p = project(c, tx, ty);
         telemetry.addLine(String.format(Locale.US, "%-13s %.2f  tx %+5.1f ty %+5.1f  %s",
                 name, conf, tx, ty,
-                p == null ? "above horizon" : String.format(Locale.US, "%.1f in (fwd %.1f, left %+.1f)",
+                p == null ? "above horizon" : String.format(Locale.US, "range %.1f in (robot fwd %.1f, left %+.1f)",
                         p[2], p[0], p[1])));
     }
 
@@ -378,13 +388,18 @@ public class LimelightPrelimBench extends LinearOpMode {
 
     private void openCsv() {
         File dir = new File(AppUtil.FIRST_FOLDER, "perception");
-        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
-        File f = new File(dir, "prelim_" + stamp + ".csv");
+        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date());
         try {
             if (!dir.isDirectory() && !dir.mkdirs()) {
                 throw new IOException("cannot create " + dir);
             }
-            csv = new PrintWriter(new FileWriter(f));
+            // createNewFile is atomic and never overwrites: a restart can't replace an earlier session's log.
+            File f = new File(dir, "prelim_" + stamp + ".csv");
+            for (int n = 2; !f.createNewFile(); n++) {
+                f = new File(dir, "prelim_" + stamp + "_" + n + ".csv");
+            }
+            csv = new PrintWriter(new FileWriter(f, true));
+            // dist_in = camera horizontal range; fwd_in/left_in = from the robot centre
             csv.println("ms,event,mode,servo,pitch_deg,pipeline,stale_ms,mark,kind,id,conf,tx,ty,dist_in,fwd_in,left_in,note");
             csvStatus = "Logging to " + f.getPath();
         } catch (IOException e) {
@@ -400,12 +415,23 @@ public class LimelightPrelimBench extends LinearOpMode {
         }
         csv.println(String.format(Locale.US, "%d,%s,%s,%.3f,%.1f,%d,%d,%d,%s,%s,%.3f,%.2f,%.2f,%s,%s,%s,%s",
                 System.currentTimeMillis(), event, mode, servoPos, pitchDeg[mode.ordinal()], pipeline, stale,
-                mark, kind, id, conf, tx, ty,
+                mark, quote(kind), quote(id), conf, tx, ty,
                 p == null ? "" : String.format(Locale.US, "%.2f", p[2]),
                 p == null ? "" : String.format(Locale.US, "%.2f", p[0]),
                 p == null ? "" : String.format(Locale.US, "%.2f", p[1]),
-                note));
+                quote(note)));
         csv.flush();
+    }
+
+    /** RFC 4180 quoting for free-form fields: wrap in quotes when needed and double any quotes inside. */
+    static String quote(String s) {
+        if (s == null) {
+            return "";
+        }
+        if (s.indexOf(',') < 0 && s.indexOf('"') < 0 && s.indexOf('\n') < 0 && s.indexOf('\r') < 0) {
+            return s;
+        }
+        return "\"" + s.replace("\"", "\"\"") + "\"";
     }
 
     private void logEvent(String event, String note) {

@@ -14,7 +14,6 @@ public class PIDf {
         kV = V;
         kA = A;
         kS = S;
-        kG = G;
         time.reset();
         previous_time = time.time();
         i = 0;

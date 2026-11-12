@@ -47,14 +47,14 @@ public class TeleOpController extends OpMode {
 }
 
 /*
-* Controls:
-* Y button - zero Field-centric drive direction and coordinates
-* L2 Held more than half-way - removes 0.75 "precision" speed cap and allows you to reach full speed
-* R2 (Reserved not implemented yet) - Shoot Balls
-* R1 (Reserved not implemented yet) - Toggle on Intake
-* Left Joystick Y - Forwards and backwards movement
-* Left Joystick X - Left and Right Strafing
-* Right Joystick X - Rotation Clockwise and Counter-Clockwise
-* L1 - Hold Break Toggle (Active Position Hold via Odometry)
-* 
-* */
+ * Controls:
+ * Y button - zero Field-centric drive direction and coordinates
+ * L2 Held more than half-way - removes 0.75 "precision" speed cap and allows you to reach full speed
+ * R2 (Reserved not implemented yet) - Shoot Balls
+ * R1 (Reserved not implemented yet) - Toggle on Intake
+ * Left Joystick Y - Forwards and backwards movement
+ * Left Joystick X - Left and Right Strafing
+ * Right Joystick X - Rotation Clockwise and Counter-Clockwise
+ * L1 - Hold Break Toggle (Active Position Hold via Odometry)
+ *
+ * */

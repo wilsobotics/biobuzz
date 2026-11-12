@@ -15,14 +15,15 @@ public class Shooter {
     public DcMotorEx flywheelMotor, flywheelMotor2;
     public CRServo turretServo, turretServo2, turretServo3;
     public DcMotorEx turretEncoder;
+    private PIDf turretPIDf, flywheelPIDf;
 
-    public void setTurretpower(Double power) {
+    public void setTurretPower(Double power) {
         turretServo.setPower(power);
         turretServo2.setPower(power);
         turretServo3.setPower(power);
     }
 
-    public void setFlywheelpower(Double power) {
+    public void setFlywheelPower(Double power) {
         flywheelMotor.setPower(power);
         flywheelMotor2.setPower(power);
     }
@@ -40,11 +41,13 @@ public class Shooter {
     }
 
     public void initLoopShooter() {
-
+        turretPIDf = new PIDf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        flywheelPIDf = new PIDf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     }
 
     public void loopShooter() {
-
+        setFlywheelPower(flywheelPIDf.output(flywheelMotor.getVelocity(), 1000.0));
+        setTurretPower(turretPIDf.output((double) turretEncoder.getCurrentPosition(), 0.0));
     }
 
 }

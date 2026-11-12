@@ -3,15 +3,19 @@ package org.firstinspires.ftc.teamcode;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
-@TeleOp(name = "Field-Centric TeleOp")
+@TeleOp(name = "Kindly rotate your wheels in accordance to my controller actions")
 public class TeleOpController extends OpMode {
     TeleOpDriver driveTrain = new TeleOpDriver();
 
     Boolean LastCheck = Boolean.FALSE;
     Boolean Current = Boolean.FALSE;
 
+    Boolean L1LastCheck = Boolean.FALSE;
+    Boolean L1Current = Boolean.FALSE;
+
     @Override
     public void init() {
+        driveTrain.gamepad1 = gamepad1;
         driveTrain.intialiseDriver();
     }
 
@@ -25,10 +29,17 @@ public class TeleOpController extends OpMode {
 
         // Reset heading check
         Current = gamepad1.y;
-        if (Current & !LastCheck) {
+        if (Current && !LastCheck) {
             driveTrain.resetHeading();
         }
         LastCheck = Current;
+
+        // Hold Break toggle check (L1 / left_bumper)
+        L1Current = gamepad1.left_bumper;
+        if (L1Current && !L1LastCheck) {
+            driveTrain.toggleHoldBreak();
+        }
+        L1LastCheck = L1Current;
 
         // Run drive loop with the dynamic speed multiplier
         driveTrain.DriveLoop(speedCap);
@@ -44,6 +55,6 @@ public class TeleOpController extends OpMode {
 * Left Joystick Y - Forwards and backwards movement
 * Left Joystick X - Left and Right Strafing
 * Right Joystick X - Rotation Clockwise and Counter-Clockwise
-* L1 (Planned not implemented yet) - Hold Break Toggle
+* L1 - Hold Break Toggle (Active Position Hold via Odometry)
 * 
 * */

@@ -28,7 +28,7 @@ public class Shooter {
     }
 
 
-    public void initShooter(HardwareMap hardwareMap) {
+    public Shooter(HardwareMap hardwareMap) {
         flywheelMotor = hardwareMap.get(DcMotorEx.class, "flywheel1");
         flywheelMotor2 = hardwareMap.get(DcMotorEx.class, "flywheel2");
         turretServo = hardwareMap.get(CRServo.class, "turret1");

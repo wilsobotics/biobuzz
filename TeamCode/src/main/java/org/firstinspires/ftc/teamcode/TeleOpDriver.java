@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode;
 
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -9,12 +10,24 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
 
+@Disabled
 public class TeleOpDriver extends OpMode {
     GoBildaPinpointDriver odo;
     public DcMotor BackLeft;
     public DcMotor BackRight;
     public DcMotor FrontLeft;
     public DcMotor FrontRight;
+
+    // Hold Break State (Approach A: Odometry-based Active Position Hold)
+    public boolean isHoldBreakEnabled = false;
+    public boolean isTargetPositionLocked = false;
+    public Pose2D targetPose = null;
+
+    // Tuning Parameters for Hold Break (Approach A)
+    public double KP_TRANSLATIONAL = 0.0035; // Needs to be tuned - proportional gain for position error in MM
+    public double KP_HEADING = 1.25;         // Needs to be tuned - proportional gain for heading error in Radians
+    public double MAX_HOLD_POWER = 0.60;     // Needs to be tuned - maximum motor power cap for hold break correction
+    public double JOYSTICK_DEADBAND = 0.05;  // Needs to be tuned - threshold for detecting driver joystick movement
 
     public void intialiseDriver() {
         odo = hardwareMap.get(GoBildaPinpointDriver.class, "odo");
@@ -26,6 +39,11 @@ public class TeleOpDriver extends OpMode {
 
         BackLeft.setDirection(DcMotorSimple.Direction.REVERSE);
         FrontLeft.setDirection(DcMotorSimple.Direction.REVERSE);
+
+        BackLeft.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        BackRight.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        FrontLeft.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        FrontRight.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
 
         // Odometry Computer Config
         odo.setOffsets(-84.0,-168.0, DistanceUnit.MM);
@@ -50,19 +68,74 @@ public class TeleOpDriver extends OpMode {
     public void init() {
     }
 
+    public void toggleHoldBreak() {
+        isHoldBreakEnabled = !isHoldBreakEnabled;
+        if (!isHoldBreakEnabled) {
+            isTargetPositionLocked = false;
+            targetPose = null;
+        }
+    }
+
+    private double normalizeAngle(double radians) {
+        double angle = radians;
+        while (angle > Math.PI) angle -= 2 * Math.PI;
+        while (angle < -Math.PI) angle += 2 * Math.PI;
+        return angle;
+    }
+
     public void GASGASGAS(double speedMultiplier) {
-        double forward = -gamepad1.left_stick_y; // Inverted Y-axis
-        double strafe = gamepad1.left_stick_x;
-        double rotate = gamepad1.right_stick_x;
+        double forward = 0.0;
+        double strafe = 0.0;
+        double rotate = 0.0;
+
+        if (gamepad1 != null) {
+            forward = -gamepad1.left_stick_y; // Inverted Y-axis
+            strafe = gamepad1.left_stick_x;
+            rotate = gamepad1.right_stick_x;
+        }
+
+        boolean isDriverInteracting = Math.abs(forward) > JOYSTICK_DEADBAND ||
+                                      Math.abs(strafe) > JOYSTICK_DEADBAND ||
+                                      Math.abs(rotate) > JOYSTICK_DEADBAND;
 
         Pose2D pos = odo.getPosition();
         double heading = pos.getHeading(AngleUnit.RADIANS);
 
-        double cosAngle = Math.cos(-heading);
-        double sinAngle = Math.sin(-heading);
+        double globalForward;
+        double globalStrafe;
 
-        double globalStrafe = -forward * sinAngle + strafe * cosAngle;
-        double globalForward = forward * cosAngle + strafe * sinAngle;
+        if (isHoldBreakEnabled && !isDriverInteracting) {
+            // Joysticks neutral & Hold Break enabled -> active position hold
+            if (!isTargetPositionLocked || targetPose == null) {
+                targetPose = pos;
+                isTargetPositionLocked = true;
+            }
+
+            // Calculate global field position errors
+            double deltaX = targetPose.getX(DistanceUnit.MM) - pos.getX(DistanceUnit.MM);
+            double deltaY = targetPose.getY(DistanceUnit.MM) - pos.getY(DistanceUnit.MM);
+            double deltaHeading = normalizeAngle(targetPose.getHeading(AngleUnit.RADIANS) - heading);
+
+            // Proportional field correction speeds
+            globalForward = deltaX * KP_TRANSLATIONAL;
+            globalStrafe = deltaY * KP_TRANSLATIONAL;
+            rotate = deltaHeading * KP_HEADING;
+
+            // Cap maximum power during hold correction
+            globalForward = Math.max(-MAX_HOLD_POWER, Math.min(MAX_HOLD_POWER, globalForward));
+            globalStrafe = Math.max(-MAX_HOLD_POWER, Math.min(MAX_HOLD_POWER, globalStrafe));
+            rotate = Math.max(-MAX_HOLD_POWER, Math.min(MAX_HOLD_POWER, rotate));
+        } else {
+            // Driver is driving or Hold Break disabled -> unlock target pose
+            isTargetPositionLocked = false;
+            targetPose = null;
+
+            double cosAngle = Math.cos(-heading);
+            double sinAngle = Math.sin(-heading);
+
+            globalStrafe = -forward * sinAngle + strafe * cosAngle;
+            globalForward = forward * cosAngle + strafe * sinAngle;
+        }
 
         double[] newWheelSpeeds = new double[4];
 
@@ -80,12 +153,19 @@ public class TeleOpDriver extends OpMode {
         BackLeft.setPower((newWheelSpeeds[2] / maxPower) * speedMultiplier);
         BackRight.setPower((newWheelSpeeds[3] / maxPower) * speedMultiplier);
 
-        //More Telemetry
+        // More Telemetry
         telemetry.addData("Robot XPos: ", pos.getX(DistanceUnit.MM));
         telemetry.addData("Robot YPos: ", pos.getY(DistanceUnit.MM));
         telemetry.addData("Robot Heading: ", heading);
         telemetry.addData("Forward Speed: ", globalForward);
         telemetry.addData("Strafe Speed: ", globalStrafe);
+        telemetry.addData("Hold Break Enabled: ", isHoldBreakEnabled);
+        telemetry.addData("Target Pose Locked: ", isTargetPositionLocked);
+        if (targetPose != null) {
+            telemetry.addData("Target X: ", targetPose.getX(DistanceUnit.MM));
+            telemetry.addData("Target Y: ", targetPose.getY(DistanceUnit.MM));
+            telemetry.addData("Target Heading: ", targetPose.getHeading(AngleUnit.RADIANS));
+        }
     }
 
     public void resetHeading() {

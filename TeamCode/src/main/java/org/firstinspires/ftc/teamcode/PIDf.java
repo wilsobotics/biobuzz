@@ -45,6 +45,6 @@ public class PIDf {
     }
 
     public Double FF(Double desired_velocity, Double desired_acceleration) {
-        return 0.0;
+        return kV*desired_velocity + kA*desired_acceleration + kS;
     }
 }

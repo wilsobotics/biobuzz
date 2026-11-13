@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode;
 
+import static org.firstinspires.ftc.robotcore.external.BlocksOpModeCompanion.hardwareMap;
+
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -64,7 +66,7 @@ public class Intake {
     private final ElapsedTime countTimer = new ElapsedTime();
     private final ElapsedTime ejectTimer = new ElapsedTime();
 
-    public Intake(HardwareMap hardwareMap) {
+    public Intake() {
         lowerRoller = hardwareMap.get(DcMotorEx.class, LOWER_MOTOR_NAME);
         upperRoller = hardwareMap.get(DcMotorEx.class, UPPER_MOTOR_NAME);
         beamBreak = hardwareMap.get(DigitalChannel.class, BEAM_BREAK_NAME);

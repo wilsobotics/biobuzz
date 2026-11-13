@@ -8,6 +8,15 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+// =====================================================================
+// HOW TO USE (from your OpMode):
+//   Intake intake = new Intake(hardwareMap);   // once, in init
+//   intake.intake();      // start collecting balls
+//   intake.reverse();     // spit everything out
+//   intake.stop();        // turn off
+//   intake.shoot();       // feed balls into the flywheel (spin flywheel up first!)
+//   intake.periodic();    // call EVERY loop, or nothing will move
+// =====================================================================
 public class Intake {
     // EJECT = full and an extra ball came in, so spit it back out (happens by itself)
     // SHOOT = open the door and run the rollers to push the balls into the flywheel
@@ -72,23 +81,23 @@ public class Intake {
         upperRoller.setDirection(DcMotorSimple.Direction.FORWARD);
     }
 
-    // ---- controls (call these from your OpMode, e.g. when a button is pressed) ----
+    // =====================================================================
+    // CONTROLS - call these from your OpMode (e.g. when a button is pressed)
+    // =====================================================================
+    public void intake()    { setState(IntakeState.INTAKE); }
+    public void reverse()   { setState(IntakeState.REVERSE); }
+    public void stop()      { setState(IntakeState.OFF); }
+    public void shoot()     { setState(IntakeState.SHOOT); }
+
     public void setState(IntakeState newState) {
         // shooting empties the intake, so start counting from 0 again
         if (newState == IntakeState.SHOOT) {
             ballCount = 0;
         }
-        this.state = newState;
+        state = newState;
     }
 
-    // shortcut: push the balls into the flywheel (spin the flywheel up first!)
-    public void shoot() {
-        setState(IntakeState.SHOOT);
-    }
-
-    public void resetBallCount() {
-        this.ballCount = 0;
-    }
+    public void resetBallCount() { ballCount = 0; }
 
     // ---- getters for telemetry and other mechanisms ----
     public IntakeState getState() { return state; }
@@ -97,6 +106,19 @@ public class Intake {
     public double getThrottle() { return lowerRoller.getPower(); }
     public String getSensorDebug() { return "beam raw=" + beamBreak.getState() + " broken=" + isBeamBroken(); }
 
+    // =====================================================================
+    // call this once every loop from your OpMode
+    // =====================================================================
+    public void periodic() {
+        countBalls();
+        updateAutoState();
+        applyOutputs();
+    }
+
+    // =====================================================================
+    // INSIDE STUFF - you shouldn't need to touch anything below here
+    // =====================================================================
+
     // Most beam-break sensors read LOW (false) when something is blocking the beam.
     // TODO TEST on the robot: show getSensorDebug() in telemetry. "broken" should be true
     // ONLY when a ball is in the beam. If it's backwards, remove the "!" below.
@@ -104,10 +126,8 @@ public class Intake {
         return !beamBreak.getState();
     }
 
-    // ---- call this once every loop from your OpMode ----
-    public void periodic() {
-
-        // 1. did a ball JUST arrive at the sensor? (wasn't there last loop, is there now)
+    // 1. did a ball JUST arrive at the sensor? (wasn't there last loop, is there now)
+    private void countBalls() {
         boolean ballInBeam = isBeamBroken();
         boolean ballArrived = ballInBeam
                 && !ballWasInBeam
@@ -116,40 +136,43 @@ public class Intake {
 
         if (ballArrived && state == IntakeState.INTAKE && ballCount < MAX_BALLS) {
             // room for it: count it
-            ballCount = ballCount + 1;
+            ballCount++;
             countTimer.reset();
         } else if (ballArrived && state == IntakeState.FULL) {
-            // already have 4: this is an extra ball, spit it out
+            // already full: this is an extra ball, spit it out
             state = IntakeState.EJECT;
             ejectTimer.reset();
             countTimer.reset();
         }
+    }
 
-        // done spitting it out? go back to holding the 4 we have
+    // 2. switch automatically between INTAKE / FULL / EJECT
+    private void updateAutoState() {
+        // done spitting the extra ball out? go back to holding what we have
         if (state == IntakeState.EJECT && ejectTimer.seconds() > EJECT_TIME_SECONDS) {
             state = IntakeState.FULL;
         }
-
-        // 2. switch automatically between taking balls in and being full
         if (state == IntakeState.INTAKE && ballCount >= MAX_BALLS) {
             state = IntakeState.FULL;
         }
         if (state == IntakeState.FULL && ballCount < MAX_BALLS) {
             state = IntakeState.INTAKE;
         }
+    }
 
-        // 3. set the motors to match the state
+    // 3. set the motors and door to match the state
+    private void applyOutputs() {
         double lowerPower;
         double upperPower;
         switch (state) {
-            case INTAKE:  lowerPower = INTAKE_POWER;  upperPower = INTAKE_POWER;  break;
-            case FULL:    lowerPower = FULL_POWER;    upperPower = FULL_POWER;    break;
-            case REVERSE: lowerPower = REVERSE_POWER; upperPower = REVERSE_POWER; break;
-            // only the first roller spits out the extra ball;
-            // the upper roller keeps holding the 4 we want to keep
-            case EJECT:   lowerPower = EJECT_POWER;   upperPower = FULL_POWER;    break;
-            case SHOOT:   lowerPower = SHOOT_POWER;   upperPower = SHOOT_POWER;   break;
-            default:      lowerPower = 0.0;           upperPower = 0.0;           break;   // OFF
+            case INTAKE:    lowerPower = INTAKE_POWER;  upperPower = INTAKE_POWER;  break;
+            case FULL:      lowerPower = FULL_POWER;    upperPower = FULL_POWER;    break;
+            case REVERSE:   lowerPower = REVERSE_POWER; upperPower = REVERSE_POWER; break;
+            // only the lower roller spits out the extra ball;
+            // the upper roller keeps holding the balls we want to keep
+            case EJECT:     lowerPower = EJECT_POWER;   upperPower = FULL_POWER;    break;
+            case SHOOT:     lowerPower = SHOOT_POWER;   upperPower = SHOOT_POWER;   break;
+            default:        lowerPower = 0.0;           upperPower = 0.0;           break;   // OFF
         }
         lowerRoller.setPower(lowerPower);
         upperRoller.setPower(upperPower);

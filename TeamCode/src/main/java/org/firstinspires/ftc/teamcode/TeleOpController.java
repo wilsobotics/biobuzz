@@ -5,56 +5,82 @@ import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 @TeleOp(name = "Kindly rotate your wheels in accordance to my controller actions")
 public class TeleOpController extends OpMode {
-    TeleOpDriver driveTrain = new TeleOpDriver();
+    private static final double SPEED_CAP_NORMAL = 0.75;
+    private static final double SPEED_CAP_FULL = 1.0;
+    private static final double SPEED_CAP_RELEASE_TRIGGER = 0.5;
 
-    Boolean LastCheck = Boolean.FALSE;
-    Boolean Current = Boolean.FALSE;
+    private TeleOpDriver driveTrain;
+    private Intake intaker;
 
-    Boolean L1LastCheck = Boolean.FALSE;
-    Boolean L1Current = Boolean.FALSE;
+    private boolean lastY = false;
+    private boolean lastL1 = false;
+    private boolean lastRightBumper = false;
+    private boolean intakeOn = false;
 
     @Override
     public void init() {
-        driveTrain.gamepad1 = gamepad1;
-        driveTrain.intialiseDriver();
+        driveTrain = new TeleOpDriver(hardwareMap, telemetry, gamepad1);
+        intaker = new Intake(hardwareMap);
+        driveTrain.initialiseDriver();
     }
 
     @Override
     public void loop() {
-        // Default cap of 0.75 power normally, removed (1.0) while R2 (right_trigger) is held down
-        double speedCap = 0.75;
-        if (gamepad1.left_trigger > 0.5) {
-            speedCap = 1.0;
+        // Default cap of 0.75 power, removed (1.0) while the LEFT trigger (L2) is held past halfway
+        double speedCap = SPEED_CAP_NORMAL;
+        if (gamepad1.left_trigger > SPEED_CAP_RELEASE_TRIGGER) {
+            speedCap = SPEED_CAP_FULL;
         }
 
         // Reset heading check
-        Current = gamepad1.y;
-        if (Current && !LastCheck) {
+        boolean currentY = gamepad1.y;
+        if (currentY && !lastY) {
             driveTrain.resetHeading();
         }
-        LastCheck = Current;
+        lastY = currentY;
 
-        // Hold Break toggle check (L1 / left_bumper)
-        L1Current = gamepad1.left_bumper;
-        if (L1Current && !L1LastCheck) {
-            driveTrain.toggleHoldBreak();
+        // Hold Brake toggle check (L1 / left_bumper)
+        boolean currentL1 = gamepad1.left_bumper;
+        if (currentL1 && !lastL1) {
+            driveTrain.toggleHoldBrake();
         }
-        L1LastCheck = L1Current;
+        lastL1 = currentL1;
+
+        // Intake toggle (R1). Edge-detected, otherwise it flips every loop while held.
+        boolean currentRightBumper = gamepad1.right_bumper;
+        if (currentRightBumper && !lastRightBumper) {
+            intakeOn = !intakeOn;
+        }
+        lastRightBumper = currentRightBumper;
+
+        // R2 shoots while held, otherwise run or stop the intake
+        if (gamepad1.right_trigger > SPEED_CAP_RELEASE_TRIGGER) {
+            intaker.shoot();
+        } else if (intakeOn) {
+            intaker.intake();
+        } else {
+            intaker.stop();
+        }
+        // The intake only moves hardware inside periodic(), so it has to run every loop.
+        intaker.periodic();
 
         // Run drive loop with the dynamic speed multiplier
-        driveTrain.DriveLoop(speedCap);
+        driveTrain.drive(speedCap);
+
+        telemetry.addData("Intake State: ", intaker.getState());
+        telemetry.addData("Balls: ", intaker.getBallCount());
     }
 }
 
 /*
  * Controls:
- * Y button - zero Field-centric drive direction and coordinates
- * L2 Held more than half-way - removes 0.75 "precision" speed cap and allows you to reach full speed
- * R2 (Reserved not implemented yet) - Shoot Balls
- * R1 (Reserved not implemented yet) - Toggle on Intake
+ * Y button - zero Field-centric drive heading (position is kept)
+ * L2 Held more than half-way - removes the 0.75 "precision" speed cap and allows you to reach full speed
+ * R2 Held - shoot (opens the door and feeds the flywheel)
+ * R1 - Toggle the intake on and off
  * Left Joystick Y - Forwards and backwards movement
  * Left Joystick X - Left and Right Strafing
  * Right Joystick X - Rotation Clockwise and Counter-Clockwise
- * L1 - Hold Break Toggle (Active Position Hold via Odometry)
+ * L1 - Hold Brake Toggle (Active Position Hold via Odometry); the right stick still turns while held
  *
  * */

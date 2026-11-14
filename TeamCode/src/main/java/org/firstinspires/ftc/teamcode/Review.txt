@@ -1,0 +1,51 @@
+Review of the four files. Everything below is static analysis — the build is green, but none of this has run on a robot.
+
+AutoTuner.java
+1. Pressing STOP during a question flips your intake direction (lines 516-521, 637). askYesNo returns false when the OpMode stops mid-question, and tuneIntake treats false as "no, they went outward" — so aborting during that prompt mutates lowerReversed/upperReversed and calls applyDirections(). Any abort should be distinguishable from an answer. This is the one bug I'd fix before running it.
+
+2. The gain score uses a single instantaneous sample (line 358). finalError is whatever the error happened to be on the last loop, so a gain that is mid-oscillation when the timer expires can win over one that is smoothly settled. Average the error over the last ~0.5 s (or take its max) and require it to stay inside the deadband for that window; otherwise the sweep is measuring luck.
+
+3. A stray stick silently invalidates a trial. drive() reads gamepad1 every loop (TeleOpDriver:331), so if a stick is nudged during a sweep the hold drops out and the trial records a nonsensical overshoot. Nothing detects it. Either add a latch getter and mark the trial invalid, or have drive() take an explicit "ignore sticks" path for tuning.
+
+4. There is no "ready?" gate after START. runOpMode goes straight into Phase 1, which drives the robot forward for 0.7 s (line ~170). The intro warns, but someone who presses START and then reaches for the controller gets a moving robot. A "press A to begin" step costs three lines.
+
+5. The heading trial's discriminator can collapse. runHeadingTrial pushes rotation at 0.5 power for up to 2 s and breaks at 25°, but if friction keeps it under that angle the trial begins with a tiny error and every candidate scores the same. Record the achieved angle and skip/retry the candidate if it is below ~15°.
+
+6. It does not tune "all the variables", and the doc should say so more loudly. Measured: kpTranslational, kpHeading, minHoldPower, both deadbands, both joystick thresholds, pod directions, beam polarity, roller direction, roller floor. Not measured: maxHoldPower, intakePower, fullPower, reversePower, ejectPower, shootPower, doorOpen, doorClosed, maxBalls, countCooldownSeconds, ejectTimeSeconds, plus the controller's three speed constants. The comment block does list them, but the OpMode name and the first screen imply full coverage.
+
+7. Runtime. Six translational trials plus five heading trials, each pushing ~150 mm and settling for 2.5 s, is roughly 90–120 s of autonomous motion, with no wall/distance awareness. That's a real field risk worth stating on the intro screen.
+
+TeleOpDriver.java
+8. resetPoseToOrigin() leaves the hold target behind (line 210). If anything calls it while the hold is engaged, the robot keeps driving to the old targetXmm/targetYmm while the pose says it is already at origin — it will lunge. AutoTuner always disables the hold first, so this is latent, but the method is public and sits next to other "safe" helpers. Clear the target in it.
+
+9. Per-loop allocation. holdTranslation returns a fresh double[2] every loop (line 279). Harmless at 50 Hz, but it is the one allocation in an otherwise allocation-free hot path, and it is easy to return via fields instead.
+
+10. Dead surface. getHeadingRadians() (206) and isTargetPositionLocked() (158) are never read; readPose() and getPose() differ only by an I2C update, which is easy to mix up — the tuner calls both, sometimes back to back, doing two Pinpoint reads in one loop.
+
+11. setPodDirections has no safety net. Flipping a pod changes the sign of the computed pose, so any caller that doesn't immediately reset the pose gets a jump. initialiseDriver and the tuner both reset right after, but nothing enforces it.
+
+Intake.java
+12. The constructor throws if any device is missing (lines 83-87) — and that kills the whole TeleOp. TeleOpController.init (line 23) has no guard, so one wrong name in the robot config (lowerIntake, upperIntake, beamBreak, door) and the OpMode fails to init with a stack trace instead of driving. AutoTuner catches this; the match OpMode should not be less defensive than the tuning tool.
+
+13. reverse() and reversePower are unreachable. No OpMode ever calls reverse(), so that state and its power constant are dead in practice — either wire it to a button or drop it.
+
+14. The door servo is written every loop (applyOutputs, line 211) with the same value at 50 Hz. Harmless, but it is needless I2C traffic in the same loop as the Pinpoint read; writing only on state change is free.
+
+15. EJECT can never lower ballCount, so once full the robot stays in the EJECT→FULL cycle until shoot() resets the count. That matches the comment, but it means the ball count is only ever trustworthy after a shot.
+
+16. getVelocity() in RUN_WITHOUT_ENCODER is unverified. The whole findMinSpinPower phase depends on it returning real numbers; if it reads 0 the tool correctly reports "unreadable", so the failure is visible — but expect to tune that phase by eye on a robot without roller encoders.
+
+TeleOpController.java
+17. Intake telemetry lands one frame late (lines 65-71). intaker.periodic() and the addData calls come after driveTrain.drive(), which already called telemetry.update(). Move the two addData lines above the drive call and they flush in the same frame.
+
+18. SPEED_CAP_RELEASE_TRIGGER is now doing two jobs (lines 31 and 57): the speed-cap trigger point and the shoot threshold. Same value, different meaning — rename or split it.
+
+19. No intake error containment. Same root cause as #12: init() has no try/catch, and no telemetry of getSensorDebug(), which is the first thing you'll want when the ball counter misbehaves.
+
+Adjacent, not in your four
+TestIntake.java still grabs a motor named "intake", which the new subsystem no longer uses (lowerIntake/upperIntake), so it will throw at init. It also still isn't @Disabled, so it sits live in the Driver Station list.
+
+What's solid
+The sign conventions agree everywhere: field +Y left, +heading CCW, strafe right-positive, rotate clockwise, and the hold rotates field error into the robot frame the same way the drive branch does. The Tuning/Settings split keeps the tuning surface explicit and still defaults to the shipping values. AutoTuner's error containment around hardware (driveReady/intakeReady) is right, and its phase separation — measure the mechanics, then the gains, then the noise floor — is the correct order, because gains tuned on bad odometry are meaningless.
+
+The three I'd fix first: the abort-flips-direction bug (#1), the instantaneous-error scoring (#2), and the unguarded Intake construction (#12).

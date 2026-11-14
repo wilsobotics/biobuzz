@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode;
 
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -8,13 +10,20 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * Measures the tuning values used by TeleOpDriver, TeleOpController and Intake, then prints a
- * block of numbers to paste back into the code. Nothing is written to flash - the values live in
- * the driver's Tuning object and the intake's Settings object for the length of this run only.
+ * Measures SOME of the tuning values used by TeleOpDriver, TeleOpController and Intake, then
+ * writes them into DriveConfig and IntakeConfig - the two @Config classes the Slothboard edits
+ * live - and prints them so you can paste them into the defaults. Nothing is written to flash:
+ * the values hold for the rest of the app session, so restart the app if you want the code
+ * defaults back.
+ *
+ * This OpMode is named "partial" on purpose: it measures about ten numbers, not all of them.
  *
  * WHAT IT ACTUALLY MEASURES (no human judgement needed):
- *   - joystick deadband       from the sticks' own noise floor
+ *   - joystick deadbands      from the sticks' own noise floor
  *   - MIN_HOLD_POWER          the power at which the robot first breaks static friction
  *   - KP_TRANSLATIONAL        sweep of candidate gains, scored on overshoot + settling error
  *   - KP_HEADING              same, for rotation
@@ -22,26 +31,30 @@ import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
  *   - beam-break polarity     from the sensor's clear vs blocked levels
  *   - minimum roller power    the power at which each roller encoder first reads motion
  *   - roller direction        confirmed by you watching the balls, then applied
+ *   - pod directions          from which way the odometry counts while the robot drives
  *
  * WHAT IT CANNOT MEASURE (a human decides):
  *   - pod offsets             a tape measure, not a sensor (verifies the result only)
- *   - starting pose           depends where you place the robot
+ *   - starting pose           depends on where you place the robot
  *   - MAX_HOLD_POWER          a safety ceiling, not a physical property
- *   - intake powers           depend on how your robot feeds and what "jams" means
- *   - door open/closed        no feedback on the servo's actual position
- *   - MAX_BALLS, cooldown, eject time   game strategy, not physics
+ *   - intake / eject / shoot powers, door positions, MAX_BALLS, cooldown, eject time
+ *                             depend on how your robot feeds and on game strategy
+ *   - the controller's speed constants
  *
- * The robot drives itself during phases 3-6, so give it about 1 m of clear floor in front and
- * keep hands off the controller until it asks. Press STOP at any time to abort.
+ * The robot drives itself during phases 1-6, so give it about 1 m of clear floor in front and
+ * keep hands off the controller until it asks. There is a "press A to continue" gate before every
+ * phase, and STOP aborts at any point.
  */
-@TeleOp(name = "Auto Tuner", group = "Tuning")
+@TeleOp(name = "Auto Tuner (partial)", group = "Tuning")
 public class AutoTuner extends LinearOpMode {
 
     // ---- how hard the tests push ----
     private static final double PUSH_POWER = 0.45;
     private static final double PUSH_TARGET_MM = 150.0;
     private static final double PUSH_TIMEOUT_SEC = 2.0;
+    public static final double INTAKE_SECONDS = 2.5;
     private static final double HOLD_SETTLE_SECONDS = 2.5;
+    public static final double ODO_TUNING_FORWARD = 0.5;
     private static final double HEADING_PUSH_POWER = 0.5;
     private static final double HEADING_PUSH_RAD = Math.toRadians(25);
     private static final double MOTION_THRESHOLD_MM = 3.0;
@@ -49,15 +62,23 @@ public class AutoTuner extends LinearOpMode {
     private static final double SETTLED_ERROR_DEG = 3.0;
     private static final double ROLLER_MOTION_TICKS_PER_SEC = 20.0;
 
+    /** Score is the mean error over this trailing window, not one instantaneous sample. */
+    private static final long SCORE_WINDOW_NS = 500_000_000L;
+    /** A candidate must beat the incumbent by this much, or the two are treated as a tie. */
+    private static final double SCORE_TIE_EPSILON = 1.0;
+    /** Below this rotation a heading trial has no error to score, so it is not a measurement. */
+    private static final double HEADING_MIN_ACHIEVED_RAD = Math.toRadians(15.0);
+    private static final int HEADING_ATTEMPTS_MAX = 2;
+    private static final long BUTTON_DEBOUNCE_MS = 150;
+
     private static final double[] TRANSLATIONAL_CANDIDATES =
             {0.0015, 0.0025, 0.0035, 0.0050, 0.0070, 0.0100};
     private static final double[] HEADING_CANDIDATES =
             {0.5, 0.8, 1.25, 1.8, 2.5};
+    public static final double ODO_TUNING_SECONDS = 0.7;
 
     private TeleOpDriver driveTrain;
-    private TeleOpDriver.Tuning tuning;
     private Intake intake;
-    private Intake.Settings intakeSettings;
 
     private boolean driveReady = false;
     private boolean intakeReady = false;
@@ -68,43 +89,110 @@ public class AutoTuner extends LinearOpMode {
     private String odometryNote = "not checked";
     private String beamNote = "not checked";
     private String directionNote = "not checked";
+    private String translationNote = "not run";
+    private String headingNote = "not run";
     private double lowerMinSpin = -1;
     private double upperMinSpin = -1;
 
-    /** Overshoot and resting error from one hold trial. */
+    /**
+     * Overshoot, mean error and settling verdict from one hold trial. An invalid trial carries a
+     * reason instead of numbers and must never be scored.
+     */
     private static class TrialResult {
-        final double finalError;
+        final boolean valid;
+        final String invalidReason;
+        final double meanError;
         final double overshoot;
         final boolean settled;
 
-        TrialResult(double finalError, double overshoot, boolean settled) {
-            this.finalError = finalError;
+        TrialResult(double meanError, double overshoot, boolean settled) {
+            this.valid = true;
+            this.invalidReason = "";
+            this.meanError = meanError;
             this.overshoot = overshoot;
             this.settled = settled;
         }
 
+        private TrialResult(String reason) {
+            this.valid = false;
+            this.invalidReason = reason;
+            this.meanError = Double.MAX_VALUE;
+            this.overshoot = Double.MAX_VALUE;
+            this.settled = false;
+        }
+
+        static TrialResult invalid(String reason) {
+            return new TrialResult(reason);
+        }
+
         double score() {
-            return finalError + 2.0 * overshoot + (settled ? 0 : 1000.0);
+            if (!valid) return Double.MAX_VALUE;
+            return meanError + 2.0 * overshoot + (settled ? 0 : 1000.0);
         }
     }
 
+    /**
+     * Trailing 0.5 s of error samples. A single sample at the deadline rewards whichever gain
+     * happened to be mid-oscillation, so the score is averaged over a window and "settled" means
+     * every sample in that window stayed inside the deadband.
+     */
+    private static class ErrorWindow {
+        private static class Sample {
+            final long tNs;
+            final double err;
+
+            Sample(long tNs, double err) {
+                this.tNs = tNs;
+                this.err = err;
+            }
+        }
+
+        private final List<Sample> samples = new ArrayList<>();
+
+        void add(double error) {
+            long now = System.nanoTime();
+            samples.add(new Sample(now, Math.abs(error)));
+            while (!samples.isEmpty() && now - samples.get(0).tNs > SCORE_WINDOW_NS) {
+                samples.remove(0);
+            }
+        }
+
+        boolean hasData() {
+            return !samples.isEmpty();
+        }
+
+        double mean() {
+            if (samples.isEmpty()) return Double.MAX_VALUE;
+            double sum = 0;
+            for (Sample sample : samples) sum += sample.err;
+            return sum / samples.size();
+        }
+
+        double max() {
+            double worst = 0;
+            for (Sample sample : samples) worst = Math.max(worst, sample.err);
+            return worst;
+        }
+
+        /** True only if the error stayed inside the deadband for the whole window. */
+        boolean stayedInside(double deadband) {
+            return hasData() && max() <= deadband;
+        }
+    }
+
+    /** YES / NO, or ABORT when STOP is pressed mid-question. */
+    private enum Answer { YES, NO, ABORT }
+
     @Override
     public void runOpMode() {
-        tuning = new TeleOpDriver.Tuning();
-        intakeSettings = new Intake.Settings();
+        // Everything this OpMode writes goes to the Driver Station AND the Slothboard, so the
+        // dashboard shows the same phase gates, live trials and results the driver sees.
+        telemetry = new MultipleTelemetry(telemetry,
+                FtcDashboard.getInstance().getTelemetry());
 
-        render("AUTO TUNER",
-                "",
-                "The robot will drive itself. Put it on the field with",
-                "about 1 m of clear floor ahead, hands off the sticks.",
-                "",
-                "It measures the hold-brake gains, deadbands, the",
-                "friction floor and the intake sensors, then prints",
-                "every value to copy back into the code.",
-                "",
-                "Press START to begin. STOP aborts at any point.");
+        renderIntro();
 
-        driveTrain = new TeleOpDriver(hardwareMap, telemetry, gamepad1, tuning);
+        driveTrain = new TeleOpDriver(hardwareMap, telemetry, gamepad1);
         driveTrain.setTelemetryEnabled(false);
         try {
             driveTrain.initialiseDriver();
@@ -114,9 +202,13 @@ public class AutoTuner extends LinearOpMode {
         }
 
         try {
-            intake = new Intake(hardwareMap, intakeSettings);
-            intake.stopMotors();
-            intakeReady = true;
+            intake = new Intake(hardwareMap);
+            if (intake.isAvailable()) {
+                intake.stopMotors();
+                intakeReady = true;
+            } else {
+                intakeError = intake.getFault();
+            }
         } catch (RuntimeException e) {
             intakeError = e.getClass().getSimpleName() + ": " + e.getMessage();
         }
@@ -126,32 +218,111 @@ public class AutoTuner extends LinearOpMode {
             return;
         }
 
+        // Nothing moves until the operator has confirmed the floor is clear.
+        if (pressAToContinue("READY?",
+                "The robot will drive itself for ~90-120 s,",
+                "~150 mm per trial, with no wall or distance sensing.",
+                "",
+                "Clear 1 m of floor ahead. Hands off the sticks.",
+                "STOP aborts at any point.")) {
+            runTuning();
+        }
+
+        parkRobot();
+        showSummaryUntilStopped();
+    }
+
+    private void renderIntro() {
+        render("AUTO TUNER (PARTIAL)",
+                "",
+                "TUNED HERE: joystick deadbands, minHoldPower,",
+                "kpTranslational, kpHeading, hold deadbands,",
+                "beam polarity, roller directions, roller floor,",
+                "pod directions.",
+                "",
+                "NOT TUNED (set these by hand): maxHoldPower,",
+                "intakePower, fullPower, reversePower, ejectPower,",
+                "shootPower, doorOpen, doorClosed, maxBalls,",
+                "countCooldownSeconds, ejectTimeSeconds, and the",
+                "controller's speed constants.",
+                "",
+                "MOTION: ~90-120 s of driving, no wall sensing.",
+                "",
+                "Press START, then A at each phase gate.");
+    }
+
+    // =================================================================
+    // Phase sequencing - one gate before every phase
+    // =================================================================
+    private void runTuning() {
         if (driveReady) {
+            if (!pressAToContinue("PHASE 1: ODOMETRY",
+                    "Drives forward 0.7 s, then asks whether it really",
+                    "moved forward. Your answers can flip a pod direction.")) {
+                return;
+            }
             odometryOk = checkOdometry();
-            measureStickDeadband();
+
             if (odometryOk) {
+                if (!pressAToContinue("PHASE 2: JOYSTICK DEADBAND",
+                        "Measuring the sticks' own noise floor.",
+                        "Hands off BOTH sticks for about 3 s.")) {
+                    return;
+                }
+                measureStickDeadband();
+
+                if (!pressAToContinue("PHASE 3: FRICTION FLOOR",
+                        "Ramps wheel power from 0.02 to 0.20.",
+                        "The robot starts moving partway through.")) {
+                    return;
+                }
                 measureFrictionFloor();
+
+                if (!pressAToContinue("PHASE 4: KP_TRANSLATIONAL",
+                        "6 candidates, each pushed ~150 mm forward",
+                        "and left 2.5 s to settle.")) {
+                    return;
+                }
                 tuneTranslationalGain();
+
+                if (!pressAToContinue("PHASE 5: HOLD DEADBANDS",
+                        "Holds one pose for 2 s. Do not touch the robot:",
+                        "its own noise while holding is the measurement.")) {
+                    return;
+                }
                 measureHoldDeadbands();
+
+                if (!pressAToContinue("PHASE 6: KP_HEADING",
+                        "5 candidates, each spun ~25 deg",
+                        "and left 2.5 s to settle.")) {
+                    return;
+                }
                 tuneHeadingGain();
             }
-            driveTrain.stopMotors();
+
             driveTrain.setHoldBrake(false);
+            driveTrain.stopMotors();
         }
 
         if (intakeReady) {
+            if (!pressAToContinue("PHASE 7: INTAKE SENSORS",
+                    "Beam-break must be CLEAR (no ball in it).",
+                    "The rollers will spin - watch which way the balls go.")) {
+                return;
+            }
             tuneIntake();
         }
+    }
 
-        // Leave the robot safe and show the results until the operator stops the OpMode.
+    private void parkRobot() {
         if (driveReady) {
             driveTrain.setHoldBrake(false);
             driveTrain.stopMotors();
         }
         if (intakeReady) {
             intake.stopMotors();
+            intake.stop();
         }
-        showSummaryUntilStopped();
     }
 
     // =================================================================
@@ -160,9 +331,6 @@ public class AutoTuner extends LinearOpMode {
     private boolean checkOdometry() {
         if (!driveTrain.isOdometryReady()) {
             odometryNote = "Pinpoint not READY (" + driveTrain.getOdometryStatus() + ")";
-            askYesNo("PHASE 1: ODOMETRY",
-                    "The Pinpoint is not READY, so drive tuning is skipped.",
-                    "Press A to continue with the intake phases.");
             return false;
         }
 
@@ -172,17 +340,21 @@ public class AutoTuner extends LinearOpMode {
         // Drive forward and ask the operator whether the robot really went forward. Without that
         // answer a negative X reading could mean "pod backwards" or "motors backwards", and
         // flipping the wrong one hides a wiring fault.
-        driveTrain.driveOpenLoop(0.5, 0, 0);
-        waitSeconds(0.7);
+        driveTrain.driveOpenLoop(ODO_TUNING_FORWARD, 0, 0);
+        waitSeconds(ODO_TUNING_SECONDS);
         driveTrain.stopMotors();
         waitSeconds(0.3);
         double forwardDelta = driveTrain.readPose().getX(DistanceUnit.MM);
 
-        boolean wentForward = askYesNo("PHASE 1: ODOMETRY",
+        Answer forwardAnswer = askAnswer("PHASE 1: ODOMETRY",
                 "The robot just drove forward at 0.5 power for 0.7 s.",
-                "Did it actually move FORWARD?  A = yes   B = no");
+                "Did it move FORWARD?   A = yes    B = no");
 
-        if (!wentForward) {
+        if (forwardAnswer == Answer.ABORT) {
+            odometryNote = "aborted during phase 1 - pod directions left as they were";
+            return false;
+        }
+        if (forwardAnswer == Answer.NO) {
             odometryNote = "robot did not move forward: fix motor directions in initialiseDriver()";
             return false;
         }
@@ -202,13 +374,21 @@ public class AutoTuner extends LinearOpMode {
         waitSeconds(0.3);
         double strafeDelta = driveTrain.readPose().getY(DistanceUnit.MM);
 
-        boolean wentRight = askYesNo("PHASE 1: ODOMETRY",
+        Answer rightAnswer = askAnswer("PHASE 1: ODOMETRY",
                 "The robot just strafed RIGHT at 0.5 power for 0.7 s.",
-                "Did it actually strafe to its RIGHT?  A = yes   B = no");
+                "Did it strafe to its RIGHT?   A = yes    B = no");
 
-        if (wentRight && strafeDelta > 0) {
+        if (rightAnswer == Answer.ABORT) {
+            odometryNote += "; aborted before the strafe check - Y pod left as it was";
+            return false;
+        }
+        if (rightAnswer == Answer.YES && strafeDelta > 0) {
             driveTrain.setPodDirections(driveTrain.isXPodForward(), false);
             odometryNote += "; Y pod flipped to REVERSE";
+        }
+
+        if (rightAnswer == Answer.NO) {
+            odometryNote += "; strafe direction unconfirmed - Y pod left as it was";
         }
 
         // Verify the X fix actually took.
@@ -247,8 +427,19 @@ public class AutoTuner extends LinearOpMode {
 
         double engage = Math.max(0.05, noise + 0.03);
         double release = Math.max(0.03, Math.min(engage - 0.01, noise + 0.015));
-        tuning.joystickEngageDeadband = engage;
-        tuning.joystickReleaseDeadband = release;
+        DriveConfig.joystickEngageDeadband = engage;
+        DriveConfig.joystickReleaseDeadband = release;
+
+        if (noise > 0.15) {
+            render("Stop it....",
+                    "Just get your fingers off the joystick",
+                    "please...");
+            render("Waiting 5 seconds for retry");
+            waitSeconds(5.0);
+            render("Retrying...");
+            measureStickDeadband();
+
+        }
 
         render("PHASE 2: JOYSTICK DEADBAND",
                 String.format("stick noise      %.3f", noise),
@@ -286,12 +477,12 @@ public class AutoTuner extends LinearOpMode {
         }
 
         driveTrain.resetPoseToOrigin();
-        tuning.minHoldPower = found > 0 ? Math.min(0.15, found + 0.01) : 0.06;
+        DriveConfig.minHoldPower = found > 0 ? Math.min(0.15, found + 0.01) : 0.06;
 
         render("PHASE 3: FRICTION FLOOR",
                 found > 0 ? String.format("first movement at %.2f power", found)
                           : "no movement measured - keeping default",
-                String.format("MIN_HOLD_POWER = %.3f", tuning.minHoldPower));
+                String.format("MIN_HOLD_POWER = %.3f", DriveConfig.minHoldPower));
         waitSeconds(1.2);
     }
 
@@ -299,33 +490,53 @@ public class AutoTuner extends LinearOpMode {
     // PHASE 4 - translational gain sweep
     // =================================================================
     private void tuneTranslationalGain() {
-        double bestGain = tuning.kpTranslational;
+        double bestGain = DriveConfig.kpTranslational;
         double bestScore = Double.MAX_VALUE;
+        boolean scoredAnything = false;
+        int rejected = 0;
 
         for (double candidate : TRANSLATIONAL_CANDIDATES) {
-            if (!opModeIsActive()) return;
+            if (!opModeIsActive()) {
+                DriveConfig.kpTranslational = bestGain;   // never leave a half-tested candidate behind
+                return;
+            }
 
-            tuning.kpTranslational = candidate;
+            DriveConfig.kpTranslational = candidate;
             TrialResult result = runTranslationTrial();
 
-            if (result.score() < bestScore) {
+            if (!result.valid) {
+                rejected++;
+                render("PHASE 4: KP_TRANSLATIONAL",
+                        String.format("candidate %.4f", candidate),
+                        "trial rejected: " + result.invalidReason,
+                        "",
+                        String.format("rejected so far %d", rejected));
+                continue;
+            }
+
+            if (result.score() < bestScore - SCORE_TIE_EPSILON) {
                 bestScore = result.score();
                 bestGain = candidate;
             }
+            scoredAnything = true;
 
             render("PHASE 4: KP_TRANSLATIONAL",
                     String.format("candidate %.4f", candidate),
-                    String.format("rest error %.1f mm", result.finalError),
+                    String.format("mean error %.1f mm", result.meanError),
                     String.format("overshoot  %.1f mm", result.overshoot),
                     result.settled ? "settled" : "did not settle",
                     "",
                     String.format("best so far %.4f", bestGain));
         }
 
-        tuning.kpTranslational = bestGain;
+        DriveConfig.kpTranslational = bestGain;
+        translationNote = scoredAnything
+                ? String.format("swept 6, chose %.4f (%d rejected)", bestGain, rejected)
+                : "no usable trial - kept the value from the code";
 
         render("PHASE 4: KP_TRANSLATIONAL",
-                String.format("chosen KP_TRANSLATIONAL = %.4f", bestGain));
+                String.format("chosen KP_TRANSLATIONAL = %.4f", bestGain),
+                translationNote);
         waitSeconds(1.2);
     }
 
@@ -334,6 +545,7 @@ public class AutoTuner extends LinearOpMode {
         driveTrain.setHoldBrake(false);
         driveTrain.resetHeading();
         driveTrain.resetPoseToOrigin();
+        driveTrain.consumeStickBreach();   // drop anything left over from the previous trial
 
         ElapsedTime pushTimer = new ElapsedTime();
         while (opModeIsActive() && pushTimer.seconds() < PUSH_TIMEOUT_SEC) {
@@ -348,20 +560,27 @@ public class AutoTuner extends LinearOpMode {
         driveTrain.setHoldBrake(true);
         driveTrain.setHoldTarget(0, 0, 0);
 
+        ErrorWindow window = new ErrorWindow();
         double overshoot = 0;
-        double finalError = Double.MAX_VALUE;
         ElapsedTime settleTimer = new ElapsedTime();
         while (opModeIsActive() && settleTimer.seconds() < HOLD_SETTLE_SECONDS) {
             driveTrain.drive(1.0);
+
+            if (driveTrain.consumeStickBreach()) {
+                driveTrain.setHoldBrake(false);
+                driveTrain.stopMotors();
+                return TrialResult.invalid("stick moved during the hold");
+            }
+
             double x = driveTrain.getPose().getX(DistanceUnit.MM);
             if (-x > overshoot) overshoot = -x;
-            finalError = Math.abs(x);
+            window.add(x);
             idle();
         }
 
         driveTrain.setHoldBrake(false);
         driveTrain.stopMotors();
-        return new TrialResult(finalError, overshoot, finalError <= SETTLED_ERROR_MM);
+        return new TrialResult(window.mean(), overshoot, window.stayedInside(SETTLED_ERROR_MM));
     }
 
     // =================================================================
@@ -392,17 +611,17 @@ public class AutoTuner extends LinearOpMode {
         driveTrain.stopMotors();
 
         double translationNoise = Math.max(maxX, maxY);
-        tuning.holdPositionDeadbandMm =
+        DriveConfig.holdPositionDeadbandMm =
                 clamp(translationNoise + 3.0, 5.0, 30.0);
-        tuning.holdHeadingDeadbandRad =
+        DriveConfig.holdHeadingDeadbandRad =
                 clamp(maxHeading + Math.toRadians(0.5), Math.toRadians(1.0), Math.toRadians(6.0));
 
         render("PHASE 5: HOLD DEADBANDS",
                 String.format("position noise %.1f mm", translationNoise),
                 String.format("heading noise  %.2f deg", Math.toDegrees(maxHeading)),
-                String.format("position deadband %.1f mm", tuning.holdPositionDeadbandMm),
+                String.format("position deadband %.1f mm", DriveConfig.holdPositionDeadbandMm),
                 String.format("heading deadband  %.2f deg",
-                        Math.toDegrees(tuning.holdHeadingDeadbandRad)));
+                        Math.toDegrees(DriveConfig.holdHeadingDeadbandRad)));
         waitSeconds(1.2);
     }
 
@@ -410,33 +629,61 @@ public class AutoTuner extends LinearOpMode {
     // PHASE 6 - heading gain sweep
     // =================================================================
     private void tuneHeadingGain() {
-        double bestGain = tuning.kpHeading;
+        double bestGain = DriveConfig.kpHeading;
         double bestScore = Double.MAX_VALUE;
+        boolean scoredAnything = false;
 
         for (double candidate : HEADING_CANDIDATES) {
-            if (!opModeIsActive()) return;
+            if (!opModeIsActive()) {
+                DriveConfig.kpHeading = bestGain;   // never leave a half-tested candidate behind
+                return;
+            }
 
-            tuning.kpHeading = candidate;
-            TrialResult result = runHeadingTrial();
+            DriveConfig.kpHeading = candidate;
 
-            if (result.score() < bestScore) {
+            // A trial that barely rotated cannot separate the candidates, so retry it once and
+            // then give up rather than score noise.
+            TrialResult result = TrialResult.invalid("not run");
+            for (int attempt = 1; attempt <= HEADING_ATTEMPTS_MAX && opModeIsActive(); attempt++) {
+                result = runHeadingTrial();
+                if (result.valid) break;
+
+                render("PHASE 6: KP_HEADING",
+                        String.format("candidate %.2f", candidate),
+                        "trial rejected: " + result.invalidReason,
+                        String.format("retry %d of %d", attempt, HEADING_ATTEMPTS_MAX));
+                waitSeconds(1.0);
+            }
+
+            if (!result.valid) {
+                headingNote = "NOT tuned - " + result.invalidReason
+                        + "; keeping the value from the code";
+                break;
+            }
+
+            if (result.score() < bestScore - SCORE_TIE_EPSILON) {
                 bestScore = result.score();
                 bestGain = candidate;
             }
+            scoredAnything = true;
 
             render("PHASE 6: KP_HEADING",
                     String.format("candidate %.2f", candidate),
-                    String.format("rest error %.2f deg", result.finalError),
+                    String.format("mean error %.2f deg", result.meanError),
                     String.format("overshoot  %.2f deg", result.overshoot),
                     result.settled ? "settled" : "did not settle",
                     "",
                     String.format("best so far %.2f", bestGain));
         }
 
-        tuning.kpHeading = bestGain;
+        DriveConfig.kpHeading = bestGain;
+        if (scoredAnything) {
+            headingNote = String.format("swept, chose %.2f", bestGain);
+        }
 
         render("PHASE 6: KP_HEADING",
-                String.format("chosen KP_HEADING = %.2f", bestGain));
+                String.format("chosen KP_HEADING = %.2f", bestGain),
+                headingNote);
         waitSeconds(1.2);
     }
 
@@ -444,6 +691,7 @@ public class AutoTuner extends LinearOpMode {
     private TrialResult runHeadingTrial() {
         driveTrain.setHoldBrake(false);
         driveTrain.resetHeading();
+        driveTrain.consumeStickBreach();
 
         ElapsedTime pushTimer = new ElapsedTime();
         while (opModeIsActive() && pushTimer.seconds() < PUSH_TIMEOUT_SEC) {
@@ -454,37 +702,48 @@ public class AutoTuner extends LinearOpMode {
         driveTrain.stopMotors();
         waitSeconds(0.4);
 
-        // Hold the current position, but the original heading - so only rotation is corrected.
         Pose2D start = driveTrain.readPose();
+        double achieved = Math.abs(start.getHeading(AngleUnit.RADIANS));
+        if (achieved < HEADING_MIN_ACHIEVED_RAD) {
+            // With a tiny starting error every candidate scores the same, so this is not a trial.
+            return TrialResult.invalid(String.format(
+                    "robot only reached %.1f deg of the %.0f deg push",
+                    Math.toDegrees(achieved), Math.toDegrees(HEADING_PUSH_RAD)));
+        }
+
+        // Hold the current position, but the original heading - so only rotation is corrected.
         driveTrain.setHoldBrake(true);
         driveTrain.setHoldTarget(start.getX(DistanceUnit.MM), start.getY(DistanceUnit.MM), 0);
 
+        ErrorWindow window = new ErrorWindow();
         double overshoot = 0;
-        double finalError = Double.MAX_VALUE;
         ElapsedTime settleTimer = new ElapsedTime();
         while (opModeIsActive() && settleTimer.seconds() < HOLD_SETTLE_SECONDS) {
             driveTrain.drive(1.0);
+
+            if (driveTrain.consumeStickBreach()) {
+                driveTrain.setHoldBrake(false);
+                driveTrain.stopMotors();
+                return TrialResult.invalid("stick moved during the hold");
+            }
+
             double heading = driveTrain.getPose().getHeading(AngleUnit.RADIANS);
             if (-heading > overshoot) overshoot = -heading;
-            finalError = Math.abs(heading);
+            window.add(Math.toDegrees(heading));
             idle();
         }
 
         driveTrain.setHoldBrake(false);
         driveTrain.stopMotors();
 
-        return new TrialResult(Math.toDegrees(finalError), Math.toDegrees(overshoot),
-                Math.toDegrees(finalError) <= SETTLED_ERROR_DEG);
+        return new TrialResult(window.mean(), Math.toDegrees(overshoot),
+                window.stayedInside(SETTLED_ERROR_DEG));
     }
 
     // =================================================================
     // PHASE 7 - intake sensors, roller direction and roller floor
     // =================================================================
     private void tuneIntake() {
-        waitForA("PHASE 7: INTAKE",
-                "Make sure the beam-break is CLEAR (no ball in it),",
-                "then press A.");
-
         boolean clearRaw = intake.getRawBeamState();
 
         while (opModeIsActive()) {
@@ -503,28 +762,36 @@ public class AutoTuner extends LinearOpMode {
         if (clearRaw == blockedRaw) {
             beamNote = "sensor did not change between clear and blocked - polarity left alone";
         } else {
-            intakeSettings.beamActiveLow = !blockedRaw;
+            IntakeConfig.beamActiveLow = !blockedRaw;
             beamNote = "blocked reads " + (blockedRaw ? "HIGH" : "LOW")
-                    + " -> beamActiveLow = " + intakeSettings.beamActiveLow;
+                    + " -> beamActiveLow = " + IntakeConfig.beamActiveLow;
         }
 
         lowerMinSpin = findMinSpinPower(true);
         upperMinSpin = findMinSpinPower(false);
 
         // Direction confirmation: run the intake and watch which way the balls go.
-        runIntakeFor(2.5);
-        boolean inward = askYesNo("PHASE 7: INTAKE",
+        runIntakeFor(INTAKE_SECONDS);
+        Answer inward = askAnswer("PHASE 7: INTAKE",
                 "The rollers just ran INTAKE for 2.5 s.",
-                "Did they pull the balls INWARD?  A = yes   B = no");
+                "Did they pull the balls INWARD?   A = yes    B = no");
 
-        if (!inward) {
-            intakeSettings.lowerReversed = !intakeSettings.lowerReversed;
-            intakeSettings.upperReversed = !intakeSettings.upperReversed;
-            intake.applyDirections();
-            runIntakeFor(2.5);
-            directionNote = "both roller directions flipped in Settings";
-        } else {
+        if (inward == Answer.YES) {
             directionNote = "roller directions left as they were";
+        } else if (inward == Answer.NO) {
+            IntakeConfig.lowerReversed = !IntakeConfig.lowerReversed;
+            IntakeConfig.upperReversed = !IntakeConfig.upperReversed;
+            intake.applyDirections();
+            runIntakeFor(INTAKE_SECONDS);
+            directionNote = "both roller directions flipped in IntakeConfig";
+        } else {
+            // Aborting here must not be read as "no": that would flip both rollers and apply them.
+            intake.stopMotors();
+            intake.stop();
+            directionNote = "aborted - roller directions left UNCHANGED";
+            render("PHASE 7: INTAKE", directionNote);
+            waitSeconds(1.0);
+            return;
         }
 
         intake.stopMotors();
@@ -539,16 +806,17 @@ public class AutoTuner extends LinearOpMode {
     }
 
     private void runIntakeFor(double seconds) {
-        intake.intake();
+        intake.setTestPower(IntakeConfig.intakePower, IntakeConfig.intakePower);
         ElapsedTime timer = new ElapsedTime();
-        while (opModeIsActive() && timer.seconds() < seconds) {
-            intake.periodic();
-            idle();
-        }
+        while (opModeIsActive() && timer.seconds() < seconds) idle();
         intake.stopMotors();
     }
 
-    /** Ramps one roller until its encoder reports motion; -1 if no encoder is readable. */
+    /**
+     * Ramps one roller until its encoder reports motion; -1 if no encoder is readable. The roller
+     * motors run RUN_WITHOUT_ENCODER, so this is reading the encoder's measured velocity, which is
+     * only real if a roller encoder is actually wired up. A -1 means "set this one by eye".
+     */
     private double findMinSpinPower(boolean lower) {
         for (double power = 0.05; power <= 0.601; power += 0.05) {
             if (!opModeIsActive()) return -1;
@@ -579,21 +847,23 @@ public class AutoTuner extends LinearOpMode {
             telemetry.addLine("");
 
             if (driveReady) {
-                telemetry.addLine("TeleOpDriver.Tuning defaults:");
-                telemetry.addData("kpTranslational", "%.4f", tuning.kpTranslational);
-                telemetry.addData("kpHeading", "%.2f", tuning.kpHeading);
-                telemetry.addData("minHoldPower", "%.3f", tuning.minHoldPower);
-                telemetry.addData("holdPositionDeadbandMm", "%.1f", tuning.holdPositionDeadbandMm);
+                telemetry.addLine("DriveConfig (the dashboard shows these live):");
+                telemetry.addData("kpTranslational", "%.4f", DriveConfig.kpTranslational);
+                telemetry.addData("kpHeading", "%.2f", DriveConfig.kpHeading);
+                telemetry.addData("minHoldPower", "%.3f", DriveConfig.minHoldPower);
+                telemetry.addData("holdPositionDeadbandMm", "%.1f", DriveConfig.holdPositionDeadbandMm);
                 telemetry.addData("holdHeadingDeadbandRad", "%.4f (%.2f deg)",
-                        tuning.holdHeadingDeadbandRad,
-                        Math.toDegrees(tuning.holdHeadingDeadbandRad));
-                telemetry.addData("joystickEngageDeadband", "%.3f", tuning.joystickEngageDeadband);
-                telemetry.addData("joystickReleaseDeadband", "%.3f", tuning.joystickReleaseDeadband);
-                telemetry.addData("maxHoldPower", "%.2f (unchanged, safety cap)", tuning.maxHoldPower);
+                        DriveConfig.holdHeadingDeadbandRad,
+                        Math.toDegrees(DriveConfig.holdHeadingDeadbandRad));
+                telemetry.addData("joystickEngageDeadband", "%.3f", DriveConfig.joystickEngageDeadband);
+                telemetry.addData("joystickReleaseDeadband", "%.3f", DriveConfig.joystickReleaseDeadband);
+                telemetry.addData("maxHoldPower", "%.2f (unchanged, safety cap)", DriveConfig.maxHoldPower);
                 telemetry.addLine("Pods: X " + (driveTrain.isXPodForward() ? "FORWARD" : "REVERSE")
                         + ", Y " + (driveTrain.isYPodForward() ? "FORWARD" : "REVERSE"));
                 telemetry.addData("Odometry", driveTrain.getOdometryStatus());
                 telemetry.addLine("odometry note: " + odometryNote);
+                telemetry.addLine("kpTranslational: " + translationNote);
+                telemetry.addLine("kpHeading: " + headingNote);
                 telemetry.addLine("");
             } else {
                 telemetry.addLine("Driver unavailable: " + driveError);
@@ -601,10 +871,10 @@ public class AutoTuner extends LinearOpMode {
             }
 
             if (intakeReady) {
-                telemetry.addLine("Intake.Settings defaults (only measured ones shown):");
-                telemetry.addData("beamActiveLow", "%b", intakeSettings.beamActiveLow);
-                telemetry.addData("lowerReversed", "%b", intakeSettings.lowerReversed);
-                telemetry.addData("upperReversed", "%b", intakeSettings.upperReversed);
+                telemetry.addLine("IntakeConfig (measured entries only):");
+                telemetry.addData("beamActiveLow", "%b", IntakeConfig.beamActiveLow);
+                telemetry.addData("lowerReversed", "%b", IntakeConfig.lowerReversed);
+                telemetry.addData("upperReversed", "%b", IntakeConfig.upperReversed);
                 telemetry.addData("beam", intake.getSensorDebug());
                 telemetry.addData("min spin", "lower %s / upper %s",
                         formatSpin(lowerMinSpin), formatSpin(upperMinSpin));
@@ -634,14 +904,36 @@ public class AutoTuner extends LinearOpMode {
         telemetry.update();
     }
 
-    private boolean askYesNo(String title, String line1, String line2) {
+    /**
+     * Blocks until A (continue) or B (abort) is pressed, and returns false on abort or STOP.
+     * Used before every phase so nothing moves until the operator says the field is clear.
+     *
+     * The first loop deliberately waits for a held button to be released: without it, one long
+     * press of A would run straight through every gate in the tune.
+     */
+    private boolean pressAToContinue(String title, String... body) {
+        ElapsedTime release = new ElapsedTime();
+        while (opModeIsActive() && (gamepad1.a || gamepad1.b) && release.seconds() < 2.0) {
+            render(title, "", "Release the button, then choose.");
+            idle();
+        }
+
         while (opModeIsActive()) {
-            render(title, "", line1, "", line2);
+            telemetry.addLine("== " + title + " ==");
+            for (String line : body) {
+                telemetry.addLine(line);
+            }
+            telemetry.addLine("");
+            telemetry.addLine("A = continue    B = abort");
+            telemetry.update();
+
             if (gamepad1.a) {
                 waitButtonRelease();
                 return true;
             }
             if (gamepad1.b) {
+                telemetry.addLine("Aborted by driver.");
+                telemetry.update();
                 waitButtonRelease();
                 return false;
             }
@@ -650,15 +942,30 @@ public class AutoTuner extends LinearOpMode {
         return false;
     }
 
-    private void waitForA(String title, String line1, String line2) {
+    /**
+     * A real question with three outcomes. ABORT is not the same as NO: the caller must leave
+     * hardware alone rather than treating a stopped OpMode as an answer.
+     */
+    private Answer askAnswer(String title, String line1, String line2) {
+        ElapsedTime release = new ElapsedTime();
+        while (opModeIsActive() && (gamepad1.a || gamepad1.b) && release.seconds() < 2.0) {
+            render(title, "", "Release the button, then answer.");
+            idle();
+        }
+
         while (opModeIsActive()) {
-            render(title, "", line1, line2);
+            render(title, "", line1, "", line2);
             if (gamepad1.a) {
                 waitButtonRelease();
-                return;
+                return Answer.YES;
+            }
+            if (gamepad1.b) {
+                waitButtonRelease();
+                return Answer.NO;
             }
             idle();
         }
+        return Answer.ABORT;
     }
 
     private void waitButtonRelease() {
@@ -666,6 +973,8 @@ public class AutoTuner extends LinearOpMode {
         while (opModeIsActive() && (gamepad1.a || gamepad1.b) && timer.seconds() < 2.0) {
             idle();
         }
+        // Give the Driver Station a moment to see the edge, so the next gate starts un-pressed.
+        sleep(BUTTON_DEBOUNCE_MS);
     }
 
     private void waitSeconds(double seconds) {

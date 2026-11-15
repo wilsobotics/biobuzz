@@ -1,7 +1,5 @@
 package org.firstinspires.ftc.teamcode;
 
-import static org.firstinspires.ftc.robotcore.external.BlocksOpModeCompanion.hardwareMap;
-
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -9,6 +7,8 @@ import com.qualcomm.robotcore.hardware.DigitalChannel;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.ElapsedTime;
+
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 
 // =====================================================================
 // HOW TO USE (from your OpMode):
@@ -22,7 +22,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 public class Intake {
     // EJECT = full and an extra ball came in, so spit it back out (happens by itself)
     // SHOOT = open the door and run the rollers to push the balls into the flywheel
-    public enum IntakeState { OFF, INTAKE, FULL, REVERSE, EJECT, SHOOT }
+    public enum IntakeState { OFF, INTAKE, FULL, REVERSE, EJECT, SHOOT, SHOOTPIDF}
 
     // =====================================================================
     // SETTINGS - everything marked "TODO" below is a placeholder.
@@ -47,17 +47,22 @@ public class Intake {
     private static final double REVERSE_POWER = -0.8;   // TODO TUNE: speed when spitting everything out
     private static final double EJECT_POWER   = -0.8;   // TODO TUNE: lower roller backwards to spit out an extra ball
     private static final double SHOOT_POWER   = 1.0;    // TODO TUNE: lower it if balls hit the flywheel too fast to shoot well
-
+    private static final double UPPER_TARGET_V = 1000;   // TODO TUNE: see whats the best v
     // ---- counting / timing ----
     private static final int MAX_BALLS = 4;                     // TODO REPLACE: how many balls the robot can hold
     private static final double COUNT_COOLDOWN_SECONDS = 0.2;   // TODO TUNE: raise if one ball counts twice (holes in the balls)
     private static final double EJECT_TIME_SECONDS = 0.5;       // TODO TUNE: long enough for the extra ball to fully leave
+
+    // ---- backup full check: motor current (balls pile up -> roller strains -> current goes up) ----
+    private static final double FULL_CURRENT_AMPS = 3.0;        // TODO TUNE: watch getCurrentDebug() with 3 vs 4 balls, pick a value between
+    private static final double FULL_CURRENT_SECONDS = 0.25;    // TODO TUNE: how long it must stay high (ignores quick spikes when the motor starts)
 
     // ---- hardware ----
     private final DcMotorEx lowerRoller;
     private final DcMotorEx upperRoller;   // TODO REPLACE: delete this (and every upperRoller line) if one motor drives both rollers
     private final DigitalChannel beamBreak;
     private final Servo door;
+    private PIDf transferPIDf;   // made fresh each time shootPIDF() is called
 
     // ---- state ----
     private IntakeState state = IntakeState.OFF;
@@ -65,8 +70,9 @@ public class Intake {
     private boolean ballWasInBeam = false;
     private final ElapsedTime countTimer = new ElapsedTime();
     private final ElapsedTime ejectTimer = new ElapsedTime();
+    private final ElapsedTime overCurrentTimer = new ElapsedTime();
 
-    public Intake() {
+    public Intake(HardwareMap hardwareMap) {
         lowerRoller = hardwareMap.get(DcMotorEx.class, LOWER_MOTOR_NAME);
         upperRoller = hardwareMap.get(DcMotorEx.class, UPPER_MOTOR_NAME);
         beamBreak = hardwareMap.get(DigitalChannel.class, BEAM_BREAK_NAME);
@@ -76,7 +82,8 @@ public class Intake {
 
         lowerRoller.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         upperRoller.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-
+        // TODO TEST: if the LOWER roller is the one that strains when full, use lowerRoller here and in currentSaysFull()
+        upperRoller.setCurrentAlert(FULL_CURRENT_AMPS, CurrentUnit.AMPS);
         // TODO TEST on the robot: run INTAKE and watch the rollers. Both must push the
         // ball INWARD. If one spins the wrong way, flip its direction here.
         lowerRoller.setDirection(DcMotorSimple.Direction.REVERSE);
@@ -93,13 +100,18 @@ public class Intake {
 
     public void setState(IntakeState newState) {
         // shooting empties the intake, so start counting from 0 again
-        if (newState == IntakeState.SHOOT) {
+        if (newState == IntakeState.SHOOT | newState == IntakeState.SHOOTPIDF) {
             ballCount = 0;
         }
-        state = newState;
+        if (newState == IntakeState.SHOOTPIDF) {
+            transferPIDf = new PIDf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        }
+        this.state = newState;
     }
-
-    public void resetBallCount() { ballCount = 0; }
+    public void shootPIDF() {
+        setState(IntakeState.SHOOTPIDF);
+    }
+    public void resetBallCount() { this.ballCount = 0; }
 
     // ---- getters for telemetry and other mechanisms ----
     public IntakeState getState() { return state; }
@@ -107,6 +119,7 @@ public class Intake {
     public boolean isFull() { return ballCount >= MAX_BALLS; }
     public double getThrottle() { return lowerRoller.getPower(); }
     public String getSensorDebug() { return "beam raw=" + beamBreak.getState() + " broken=" + isBeamBroken(); }
+    public String getCurrentDebug() { return "upper amps=" + upperRoller.getCurrent(CurrentUnit.AMPS) + " over=" + upperRoller.isOverCurrent(); }
 
     // =====================================================================
     // call this once every loop from your OpMode
@@ -148,8 +161,21 @@ public class Intake {
         }
     }
 
+    // backup check: has the roller been straining (over the current limit) for a bit?
+    private boolean currentSaysFull() {
+        if (!upperRoller.isOverCurrent()) {
+            overCurrentTimer.reset();
+        }
+        return overCurrentTimer.seconds() > FULL_CURRENT_SECONDS;
+    }
+
     // 2. switch automatically between INTAKE / FULL / EJECT
     private void updateAutoState() {
+        // backup: if the beam break missed a ball but the roller is straining, we're full
+        boolean strainingFull = currentSaysFull();
+        if (state == IntakeState.INTAKE && strainingFull) {
+            ballCount = MAX_BALLS;
+        }
         // done spitting the extra ball out? go back to holding what we have
         if (state == IntakeState.EJECT && ejectTimer.seconds() > EJECT_TIME_SECONDS) {
             state = IntakeState.FULL;
@@ -174,12 +200,13 @@ public class Intake {
             // the upper roller keeps holding the balls we want to keep
             case EJECT:     lowerPower = EJECT_POWER;   upperPower = FULL_POWER;    break;
             case SHOOT:     lowerPower = SHOOT_POWER;   upperPower = SHOOT_POWER;   break;
+            case SHOOTPIDF: lowerPower = SHOOT_POWER; upperPower = transferPIDf.output(upperRoller.getVelocity(), UPPER_TARGET_V); break;
             default:        lowerPower = 0.0;           upperPower = 0.0;           break;   // OFF
         }
         lowerRoller.setPower(lowerPower);
         upperRoller.setPower(upperPower);
 
         // door is only open while shooting; closed it keeps balls away from the flywheel
-        door.setPosition(state == IntakeState.SHOOT ? DOOR_OPEN : DOOR_CLOSED);
+        door.setPosition(state == IntakeState.SHOOT || state == IntakeState.SHOOTPIDF ? DOOR_OPEN : DOOR_CLOSED);
     }
 }

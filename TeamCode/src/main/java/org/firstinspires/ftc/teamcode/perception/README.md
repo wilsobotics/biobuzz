@@ -48,6 +48,7 @@ into `PerceptionConfig.java`), and logs everything to `FIRST/perception/prelim_*
 
 ## Behaviour notes
 
+- Only balls in open play are chased. A detection whose box (from `ta`, smaller side, so merged pairs still pass) is more than `MAX_SIZE_RATIO` times the size a floor ball would have at its projected range is off the floor (held in a robot, sitting on a structure) and is dropped before it reaches the map. It catches balls lifted about 4 in or more; a ball in another robot's intake at floor level still passes. Balls within `STRUCTURE_MARGIN_IN` of the hive base or a flower are never targets or hints.
 - The map uses the tight gate when either the sighting or the ball is precise, so far, blurry sightings can't absorb a nearby ball.
 - "In view but unseen" misses must be consecutive; one dropped detector frame never removes a ball.
 - A ball hidden behind a nearer ball (within atan2(diameter, range to the nearer ball) of its bearing) neither counts a miss nor resets it, so two balls in line are never deleted for being merged into one detection. The occluder can be a sighting in this frame or a confirmed map ball of any class seen within `OCCLUDER_RECENT_MS` (colour pipelines can't see other colours).

@@ -6,6 +6,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.firstinspires.ftc.teamcode.perception.BallClass;
+import org.firstinspires.ftc.teamcode.perception.BallMap;
+import org.firstinspires.ftc.teamcode.perception.MapBall;
 import org.junit.Test;
 
 import java.util.List;
@@ -77,6 +79,23 @@ public class FieldModelTest {
         assertTrue(a.containsPedro(30, 30));
         assertFalse(a.containsPedro(100, 30));
         assertEquals(1, a.outsideZones().size());
+    }
+
+    @Test
+    public void ballsInTheHiveOrAFlowerAreNotInOpenPlay() {
+        AllowedArea a = new AllowedArea(CollectRequest.builder(Alliance.RED, false).build(), new FieldFrame(0));
+        BallMap map = new BallMap();
+        MapSeeds.confirmed(map, BallClass.POLLEN, 72.0, 72.0,     // inside the hive base
+                BallClass.POLLEN, 48.0, 142.0,                     // in a flower on the wall
+                BallClass.POLLEN, 30.0, 30.0,                      // loose on the floor
+                BallClass.POLLEN, 44.0, 72.0);                     // on the floor just outside the hive
+        for (MapBall b : map.all()) {
+            boolean open = b.x() < 50 && (b.y() < 100);
+            assertEquals("ball at " + b.x() + "," + b.y(), open, a.targetOk(b));
+        }
+        assertTrue(FieldGeometry.inStructure(72, 72, 0));
+        assertTrue(FieldGeometry.inStructure(140, 96, 0));
+        assertFalse(FieldGeometry.inStructure(44, 72, 1.0));
     }
 
     @Test

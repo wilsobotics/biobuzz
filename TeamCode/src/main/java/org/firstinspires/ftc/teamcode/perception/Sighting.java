@@ -23,14 +23,18 @@ public final class Sighting {
         this.maybeTwo = maybeTwo;
     }
 
-    /** Projects a detection, or returns null for non-balls, junk confidence or rays that miss the floor. */
+    /**
+     * Projects a detection, or returns null for non-balls, junk confidence, rays that miss the
+     * floor, and balls not in open play: a box too big for its projected range means the ball is
+     * off the floor (held by a robot or sitting on a structure), so its projection is wrong too.
+     */
     public static Sighting from(Detection d, Pose robot, CameraMount m) {
         BallClass c = BallClass.fromClassId(d.classId);
         if (c == null || d.confidence < PerceptionConfig.MIN_CONFIDENCE) {
             return null;
         }
         double[] p = BallProjector.project(robot, m, d.txDeg, d.tyDeg, c.centerHeightIn());
-        if (p == null) {
+        if (p == null || offTheFloor(d, p[2], m, c)) {
             return null;
         }
         double sigma = Math.max(PerceptionConfig.MIN_SIGMA_IN,
@@ -38,6 +42,18 @@ public final class Sighting {
         return new Sighting(c, p[0], p[1], p[2], sigma,
                 quality(d.confidence, p[2], d.txDeg, d.tyDeg, m),
                 d.aspect > PerceptionConfig.MAYBE_TWO_ASPECT);
+    }
+
+    /** Angular diameter (deg) of a ball of this class on the floor at this horizontal range. */
+    public static double expectedSizeDeg(double range, CameraMount m, BallClass c) {
+        double slant = Math.hypot(range, m.heightIn - c.centerHeightIn());
+        return Math.toDegrees(2.0 * Math.atan(c.diameterIn / 2.0 / slant));
+    }
+
+    private static boolean offTheFloor(Detection d, double range, CameraMount m, BallClass c) {
+        double ratio = PerceptionConfig.MAX_SIZE_RATIO;
+        double seen = d.sizeDeg(m.hfovDeg, m.vfovDeg);
+        return ratio > 0 && seen > 0 && seen > ratio * expectedSizeDeg(range, m, c);
     }
 
     /** Confidence x range factor x frame-edge factor. */

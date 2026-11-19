@@ -46,6 +46,12 @@ public final class PerceptionConfig {
     public static double TARGET_QUALITY = 0.5;
     public static double TARGET_SIGMA_IN = 2.0;
     public static double MAYBE_TWO_ASPECT = 1.6;
+    /**
+     * Open play: a box more than this many times the size a floor ball would have at its projected
+     * range is off the floor (held in a robot, on a structure) and is dropped. 0 turns the check off.
+     * 1.6 catches balls lifted about 4 in or more; refit from the prelim session data.
+     */
+    public static double MAX_SIZE_RATIO = 1.6;
 
     // data association
     public static double GATE_SIGMAS = 3.0;

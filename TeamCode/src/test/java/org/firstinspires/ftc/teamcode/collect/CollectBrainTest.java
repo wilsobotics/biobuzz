@@ -6,6 +6,9 @@ import static org.junit.Assert.assertTrue;
 
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
+import com.skeletonarmy.marrow.zones.CircleZone;
+import com.skeletonarmy.marrow.zones.Point;
+import com.skeletonarmy.marrow.zones.Zone;
 
 import org.firstinspires.ftc.teamcode.perception.BallClass;
 import org.firstinspires.ftc.teamcode.perception.BallMap;
@@ -13,6 +16,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.util.Collections;
+import java.util.List;
 
 public class CollectBrainTest {
     static final class FakeFollower implements PathFollower {
@@ -58,6 +62,23 @@ public class CollectBrainTest {
         return new CollectBrain(req, map, follower, intake, new FieldFrame(0),
                 Collections.<ObstacleProvider>emptyList());
     }
+
+    /** A ball Weaver can't reach: on open floor, with an obstacle (say a parked robot) on top of it. */
+    private CollectBrain brainWithBlockedBall(CollectRequest req) {
+        MapSeeds.confirmed(map, BallClass.POLLEN, BLOCKED_X, BLOCKED_Y);
+        final List<Zone> robot = Collections.<Zone>singletonList(
+                new CircleZone(new Point(BLOCKED_X, BLOCKED_Y), 12));
+        return new CollectBrain(req, map, follower, intake, new FieldFrame(0),
+                Collections.<ObstacleProvider>singletonList(new ObstacleProvider() {
+                    @Override
+                    public List<Zone> obstacles() {
+                        return robot;
+                    }
+                }));
+    }
+
+    private static final double BLOCKED_X = 110.0;
+    private static final double BLOCKED_Y = 30.0;
 
     private static CollectRequest.Builder quiet() {
         return CollectRequest.builder(Alliance.RED, false).useHints(false).onlySources();
@@ -184,8 +205,7 @@ public class CollectBrainTest {
 
     @Test
     public void unreachableTargetIsSkippedInsteadOfReplannedForever() {
-        MapSeeds.confirmed(map, BallClass.POLLEN, 72.0, 72.0);
-        CollectBrain b = brain(quiet().onlySources("LOADING_ZONE_RED").build());
+        CollectBrain b = brainWithBlockedBall(quiet().onlySources("LOADING_ZONE_RED").build());
         b.start(100);
         assertEquals("LOOK", b.state());
         assertEquals(1, follower.follows);
@@ -199,8 +219,7 @@ public class CollectBrainTest {
 
     @Test
     public void unreachableBallIsOfferedAgainAfterTheHold() {
-        MapSeeds.confirmed(map, BallClass.POLLEN, 72.0, 72.0);
-        CollectBrain b = brain(quiet().onlySources("LOADING_ZONE_RED").build());
+        CollectBrain b = brainWithBlockedBall(quiet().onlySources("LOADING_ZONE_RED").build());
         b.start(100);
         b.update(800);
         assertEquals(1, b.replanCount());
@@ -281,8 +300,7 @@ public class CollectBrainTest {
 
     @Test
     public void heldUnreachableTargetDelaysNoTargetsUntilTheHoldEnds() {
-        MapSeeds.confirmed(map, BallClass.POLLEN, 72.0, 72.0);
-        CollectBrain b = brain(quiet().build());
+        CollectBrain b = brainWithBlockedBall(quiet().build());
         b.start(100);
         assertFalse(b.isDone());
         assertTrue(follower.stopped);

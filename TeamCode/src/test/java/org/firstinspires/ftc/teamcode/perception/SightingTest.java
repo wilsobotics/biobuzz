@@ -48,6 +48,51 @@ public class SightingTest {
         assertTrue(s.maybeTwo);
     }
 
+    /** Limelight ta (% of image area) for a box of sizeDeg x sizeDeg*aspect degrees. */
+    private static double areaPct(double heightDeg, double aspect) {
+        return heightDeg * heightDeg * aspect / (M.hfovDeg * M.vfovDeg) * 100.0;
+    }
+
+    @Test
+    public void floorBallWhoseBoxMatchesItsRangeIsKept() {
+        double expect = Sighting.expectedSizeDeg(40, M, BallClass.POLLEN);
+        assertEquals(Math.toDegrees(2 * Math.atan(1.4 / Math.hypot(40, 11))), expect, 1e-9);
+        Sighting s = Sighting.from(new Detection(0, 0.9, 0, tyForRange(40), 1, areaPct(expect * 1.2, 1)), ORIGIN, M);
+        assertEquals(40, s.x, 1e-6);
+    }
+
+    @Test
+    public void ballLiftedOffTheFloorIsDropped() {
+        // Pollen held 6 in up (centre 7.4 in) at 30 in, e.g. in another robot's intake. Projected
+        // onto the floor it lands at about 66 in, where a floor ball would look far smaller.
+        double ty = 25 - Math.toDegrees(Math.atan2(12.4 - 7.4, 30));
+        double seen = Math.toDegrees(2 * Math.atan(1.4 / Math.hypot(30, 5)));
+        assertNull(Sighting.from(new Detection(0, 0.9, 0, ty, 1, areaPct(seen, 1)), ORIGIN, M));
+    }
+
+    @Test
+    public void sizeCheckIgnoresUnknownSizeMergedPairsAndPartlyHiddenBalls() {
+        double ty = tyForRange(40);
+        double expect = Sighting.expectedSizeDeg(40, M, BallClass.POLLEN);
+        assertTrue(Sighting.from(new Detection(0, 0.9, 0, ty, 1), ORIGIN, M) != null);              // no ta
+        Sighting pair = Sighting.from(new Detection(0, 0.9, 0, ty, 2.0, areaPct(expect, 2.0)), ORIGIN, M);
+        assertTrue(pair != null && pair.maybeTwo);                                                  // two side by side
+        assertTrue(Sighting.from(new Detection(0, 0.9, 0, ty, 1, areaPct(expect * 0.5, 1)), ORIGIN, M) != null);
+    }
+
+    @Test
+    public void sizeCheckCanBeSwitchedOff() {
+        double ty = 25 - Math.toDegrees(Math.atan2(5, 30));
+        double seen = Math.toDegrees(2 * Math.atan(1.4 / Math.hypot(30, 5)));
+        double saved = PerceptionConfig.MAX_SIZE_RATIO;
+        PerceptionConfig.MAX_SIZE_RATIO = 0;
+        try {
+            assertTrue(Sighting.from(new Detection(0, 0.9, 0, ty, 1, areaPct(seen, 1)), ORIGIN, M) != null);
+        } finally {
+            PerceptionConfig.MAX_SIZE_RATIO = saved;
+        }
+    }
+
     @Test
     public void aspectComesFromBoxCorners() {
         List<List<Double>> corners = Arrays.asList(

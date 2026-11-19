@@ -38,15 +38,21 @@ public final class AllowedArea {
         return rect.contains(m[0], m[1]);
     }
 
-    /** Inside the area and, in AUTO, clear of the midline by the margin plus the ball's uncertainty. */
+    /**
+     * In open play (not in the hive or a flower), inside the area and, in AUTO, clear of the midline
+     * by the margin plus the ball's uncertainty. Used for both targets and hints.
+     */
     public boolean targetOk(MapBall b) {
         if (!containsPedro(b.x(), b.y())) {
+            return false;
+        }
+        double[] m = frame.toManual(b.x(), b.y());
+        if (FieldGeometry.inStructure(m[0], m[1], CollectConfig.STRUCTURE_MARGIN_IN)) {
             return false;
         }
         if (!auto) {
             return true;
         }
-        double[] m = frame.toManual(b.x(), b.y());
         return Math.abs(m[0] - FieldGeometry.FIELD_CENTER) >= CollectConfig.MIDLINE_MARGIN_IN + b.sigma();
     }
 

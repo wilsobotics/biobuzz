@@ -22,6 +22,8 @@ public final class CollectConfig {
 
     // zones
     public static double MIDLINE_MARGIN_IN = 4.0;
+    /** Balls this close to the hive base or a flower are not in open play (never targets or hints). */
+    public static double STRUCTURE_MARGIN_IN = 1.0;
     public static double CUSTOM_MIN_X = 0, CUSTOM_MIN_Y = 0, CUSTOM_MAX_X = 144, CUSTOM_MAX_Y = 144;
 
     // run

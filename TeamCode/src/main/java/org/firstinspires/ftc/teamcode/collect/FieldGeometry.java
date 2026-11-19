@@ -23,6 +23,23 @@ public final class FieldGeometry {
     public static final double[][] FLOWERS = {{48, 144}, {96, 0}, {0, 48}, {144, 96}};
     public static final double FLOWER_RADIUS_IN = 4.0;
 
+    /**
+     * Whether a manual-frame point is in a structure (the hive base or a flower), grown by margin:
+     * a ball there is scored or stored, not in open play, and the robot can't drive to it anyway.
+     */
+    public static boolean inStructure(double x, double y, double margin) {
+        if (x >= HIVE.minX - margin && x <= HIVE.maxX + margin
+                && y >= HIVE.minY - margin && y <= HIVE.maxY + margin) {
+            return true;
+        }
+        for (double[] c : FLOWERS) {
+            if (Math.hypot(x - c[0], y - c[1]) <= FLOWER_RADIUS_IN + margin) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** AUTO sides (manual G402): columns A-C red, D-F blue. */
     public static FieldRect ownHalf(Alliance a) {
         return a == Alliance.RED ? new FieldRect(0, 0, 72, 144) : new FieldRect(72, 0, 144, 144);

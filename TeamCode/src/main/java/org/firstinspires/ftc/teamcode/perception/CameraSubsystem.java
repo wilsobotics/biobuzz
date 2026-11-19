@@ -143,7 +143,8 @@ public final class CameraSubsystem implements Subsystem {
         if (dr != null) {
             for (LLResultTypes.DetectorResult d : dr) {
                 det.add(new Detection(d.getClassId(), d.getConfidence(), d.getTargetXDegrees(),
-                        d.getTargetYDegrees(), Detection.aspectFromCorners(d.getTargetCorners())));
+                        d.getTargetYDegrees(), Detection.aspectFromCorners(d.getTargetCorners()),
+                        d.getTargetArea()));
             }
         }
         ArrayList<Detection> col = new ArrayList<Detection>();
@@ -151,7 +152,7 @@ public final class CameraSubsystem implements Subsystem {
         if (cr != null) {
             for (LLResultTypes.ColorResult c : cr) {
                 col.add(new Detection(-1, 1.0, c.getTargetXDegrees(), c.getTargetYDegrees(),
-                        Detection.aspectFromCorners(c.getTargetCorners())));
+                        Detection.aspectFromCorners(c.getTargetCorners()), c.getTargetArea()));
             }
         }
         return new RawResult(r.getControlHubTimeStamp(), r.getStaleness(), r.getPipelineIndex(),

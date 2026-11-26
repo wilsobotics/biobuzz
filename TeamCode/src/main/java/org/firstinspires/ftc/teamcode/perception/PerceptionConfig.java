@@ -13,13 +13,15 @@ public final class PerceptionConfig {
     public static String TILT_SERVO_NAME = "camTilt";   // "" = fixed mount
     public static int GOAL_PIPELINE = 0;                 // AprilTag (fiducial) pipeline
     /** Ball pipelines, e.g. "1:NEURAL" or "1:COLOUR:POLLEN,2:COLOUR:RED_NECTAR,3:COLOUR:BLUE_NECTAR". */
-    public static String BALL_PIPELINES = "1:NEURAL";
+    // Team Limelight (20 Nov 2026): slot 3 = shipped Hive Vision SSD, the most reliable model so far.
+    public static String BALL_PIPELINES = "3:NEURAL";
     public static double TILT_BALL_POS = 0.5;            // measure with the prelim bench
     public static double TILT_GOAL_POS = 0.5;
 
     // timing
-    public static long MODE_SETTLE_MS = 250;             // servo move + pipeline switch
-    public static long PIPELINE_SETTLE_MS = 100;         // pipeline switch only (colour cycling)
+    // A pipeline switch on the 3A measured 226-309 ms (median ~280, prelim bench 20 Nov 2026).
+    public static long MODE_SETTLE_MS = 350;             // servo move + pipeline switch
+    public static long PIPELINE_SETTLE_MS = 320;         // pipeline switch only (colour cycling)
     public static long MAX_STALENESS_MS = 150;
     public static long POSE_HISTORY_MS = 500;
     /** Max wait for a pose newer than a frame's capture time before using the newest pose anyway. */

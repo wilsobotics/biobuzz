@@ -75,4 +75,5 @@ into `PerceptionConfig.java`), and logs everything to `FIRST/perception/prelim_*
 
 - `opmodes/RobotHooks.createFollower` — drivetrain team's Pedro 3 Follower.
 - `collect/IntakeStatus` — intake team's adapter (`ballCount`, `capacity`).
-- `PerceptionConfig.GOAL_PIPELINE` / `BALL_PIPELINES` — agree numbering with Vatsal.
+- `PerceptionConfig.GOAL_PIPELINE` / `BALL_PIPELINES` — agree numbering with Vatsal. Default ball pipeline is slot 3
+  (the shipped Hive Vision SSD on the team Limelight); change it if the slot layout changes.

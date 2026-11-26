@@ -8,17 +8,20 @@
  * Re-tune on your actual field camera with hsv_tuner.py and copy the
  * constants here if lighting differs.
  *
- * Metrics (vs YOLO truth on the development match video):
- *   yellow: recall 68.7%, precision 39.9%
- *   red   : recall 80.1%, precision 26.0%   (red panels/tape are FP-heavy)
- *   blue  : recall 82.3%, precision 65.5%
+ * Measured quality on the development match video (vs YOLO truth) is low -
+ * roughly 26-65% precision - so treat these as candidates, and never act on a
+ * single frame in autonomous: require the same colour to win several
+ * consecutive frames before committing to it.
  *
  * Typical HSV (OpenCV H 0..180, S/V 0..255):
- *   yellow: H 9..33,   S 90..255,  V 45..238
+ *   yellow: H 16..33,   S 90..255,  V 45..238
  *   red   : H 0..15 and 170..180,  S 81..255,  V 45..232
  *   blue  : H 102..128, S 80..255, V 45..247
+ *
+ * Yellow starts at H 16 because the old H 9 lower bound overlapped red's 0..15
+ * range, which let a single orange blob count as both yellow and red.
  */
-package  org.firstinspires.ftc.teamcode.Vision;
+package org.firstinspires.ftc.teamcode.vision;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,8 +34,8 @@ import org.opencv.core.Rect;
 import org.opencv.core.Scalar;
 import org.opencv.imgproc.Imgproc;
 
+import org.firstinspires.ftc.robotcore.internal.camera.calibration.CameraCalibration;
 import org.firstinspires.ftc.vision.VisionProcessor;
-import org.firstinspires.ftc.vision.apriltag.AprilTagDetection; // not used, but common import
 
 public class BallDetectorPipeline implements VisionProcessor {
 
@@ -42,7 +45,7 @@ public class BallDetectorPipeline implements VisionProcessor {
      * ----------------------------------------------------------------*/
     public enum BallColor { YELLOW, RED, BLUE }
 
-    private static final Scalar YELLOW_LO = new Scalar(9, 90, 45);
+    private static final Scalar YELLOW_LO = new Scalar(16, 90, 45);
     private static final Scalar YELLOW_HI = new Scalar(33, 255, 238);
 
     private static final Scalar RED_LO_A = new Scalar(0, 81, 45);
@@ -54,28 +57,31 @@ public class BallDetectorPipeline implements VisionProcessor {
     private static final Scalar BLUE_HI = new Scalar(128, 255, 247);
 
     /* ------------------------------------------------------------------
-     * 2) Shape/size gating (pixels at camera resolution).
+     * 2) Shape/size gating, expressed as a fraction of the frame area so the
+     *    gates survive a change of camera resolution. The numbers in the
+     *    comments are the pixel values they work out to on a 640x480 frame.
      *    Real balls on the FTC field are small-to-mid and roughly square;
      *    robot side panels are giant or elongated. Tune for your camera.
      * ----------------------------------------------------------------*/
-    private static final int   MIN_AREA_PX  = 900;    // kills speckle patches
-    private static final int   MAX_AREA_PX  = 12000;  // kills big robot panels
+    private static final int   REFERENCE_AREA_PX = 640 * 480;
+
+    private static final double MIN_AREA_FRAC = 900.0 / REFERENCE_AREA_PX;    // kills speckle patches
+    private static final double MAX_AREA_FRAC = 12000.0 / REFERENCE_AREA_PX;  // kills big robot panels
     private static final double MIN_ASPECT  = 0.71;   // near-square balls only
     private static final double MAX_ASPECT  = 1.4;
     private static final double MIN_FILL    = 0.5;    // contourArea / rectArea
-    private static final double MAX_FILL    = 1.3;
     private static final boolean USE_MORPH = true;    // close small gaps
 
-    /** Typical real-ball contour area per color (px at camera resolution). */
-    private static final double EXPECT_YELLOW_AREA = 3500;
-    private static final double EXPECT_RED_AREA    = 4200;
-    private static final double EXPECT_BLUE_AREA   = 4200;
+    /** Typical real-ball contour area per color, as a fraction of the frame. */
+    private static final double EXPECT_YELLOW_FRAC = 3500.0 / REFERENCE_AREA_PX;
+    private static final double EXPECT_RED_FRAC    = 4200.0 / REFERENCE_AREA_PX;
+    private static final double EXPECT_BLUE_FRAC   = 4200.0 / REFERENCE_AREA_PX;
 
-    private static double expectArea(BallColor c) {
+    private static double expectAreaFrac(BallColor c) {
         switch (c) {
-            case YELLOW: return EXPECT_YELLOW_AREA;
-            case BLUE:   return EXPECT_BLUE_AREA;
-            default:     return EXPECT_RED_AREA;
+            case YELLOW: return EXPECT_YELLOW_FRAC;
+            case BLUE:   return EXPECT_BLUE_FRAC;
+            default:     return EXPECT_RED_FRAC;
         }
     }
 
@@ -83,6 +89,10 @@ public class BallDetectorPipeline implements VisionProcessor {
     private boolean detect  = true;
     private final Object lock = new Object();
     private List<BallBlob> detections = new ArrayList<>();
+
+    private int frameAreaPx = REFERENCE_AREA_PX;
+    private double minAreaPx = MIN_AREA_FRAC * REFERENCE_AREA_PX;
+    private double maxAreaPx = MAX_AREA_FRAC * REFERENCE_AREA_PX;
 
     /** One detected ball candidate for the OpMode. */
     public static class BallBlob {
@@ -112,11 +122,12 @@ public class BallDetectorPipeline implements VisionProcessor {
     public BallBlob bestOf(BallColor color) {
         BallBlob best = null;
         double bestCost = Double.MAX_VALUE;
+        double expected = expectAreaFrac(color) * frameAreaPx;
         synchronized (lock) {
             for (BallBlob b : detections) {
                 if (b.color != color) continue;
                 double fill = b.area / (double) (b.rect.width * b.rect.height);
-                double cost = Math.abs(b.area / expectArea(color) - 1.0)
+                double cost = Math.abs(b.area / expected - 1.0)
                             + 4.0 * (1.0 - fill);
                 if (cost < bestCost) {
                     bestCost = cost;
@@ -139,8 +150,13 @@ public class BallDetectorPipeline implements VisionProcessor {
     public void resume()           { suspend = false; }
 
     @Override
-    public void init(int width, int height, org.firstinspires.ftc.vision.CameraCalibration calibration) {
-        // No per-resolution init needed; constants are pixel-based.
+    public void init(int width, int height, CameraCalibration calibration) {
+        // Only used to scale the pixel-area gates to the camera's actual resolution.
+        if (width > 0 && height > 0) {
+            frameAreaPx = width * height;
+            minAreaPx = MIN_AREA_FRAC * frameAreaPx;
+            maxAreaPx = MAX_AREA_FRAC * frameAreaPx;
+        }
     }
 
     @Override
@@ -158,16 +174,17 @@ public class BallDetectorPipeline implements VisionProcessor {
 
         synchronized (lock) { detections = out; }
 
-        // Optional: draw overlay for debug (VisionPortal can display it)
-        Mat output = input.clone();
-        if (detect) drawOverlay(output, out);
-        return output;
+        // The return value only reaches onDrawFrame as userContext; VisionPortal does not
+        // display it. Annotating the input frame in place is what makes the overlay show,
+        // and it costs no per-frame native allocation.
+        if (detect) drawOverlay(input, out);
+        return input;
     }
 
     @Override
     public void onDrawFrame(android.graphics.Canvas canvas, int onscreenWidth, int onscreenHeight,
                             float scaleBmpPxToCanvasPx, float scaleCanvasDensity, Object userContext) {
-        // No custom canvas drawing needed.
+        // Overlay is drawn onto the frame in processFrame; no custom canvas drawing needed.
     }
 
     private void maskAndFind(Mat input, BallColor color, Scalar loA, Scalar hiA,
@@ -202,12 +219,12 @@ public class BallDetectorPipeline implements VisionProcessor {
             double area = Imgproc.contourArea(ct);
             Rect r = Imgproc.boundingRect(ct);
             ct.release();
-            if (area < MIN_AREA_PX || area > MAX_AREA_PX) continue;
+            if (area < minAreaPx || area > maxAreaPx) continue;
             if (r.width <= 0 || r.height <= 0) continue;
             double aspect = (double) r.width / r.height;
             if (aspect < MIN_ASPECT || aspect > MAX_ASPECT) continue;
             double fill = area / (double) (r.width * r.height);
-            if (fill < MIN_FILL || fill > MAX_FILL) continue;
+            if (fill < MIN_FILL) continue;
             out.add(new BallBlob(color, r, area));
         }
     }

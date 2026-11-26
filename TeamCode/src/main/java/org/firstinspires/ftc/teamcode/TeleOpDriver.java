@@ -21,11 +21,18 @@ import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
  * Sign conventions used throughout, and the assumptions they rest on:
  *   - Field/Pinpoint frame: +X forward, +Y to the LEFT, +heading counter-clockwise.
  *   - Wheel mix: +strafe is RIGHT, +rotate is CLOCKWISE, so it takes the robot-frame vector.
+<<<<<<< Updated upstream
  *   - Heading 0 is the field +X direction; Y resets it without touching X/Y.
+=======
+ *   - Heading 0 is the field +X direction and the frame itself lives in FieldMap; the Y reset
+ *     redefines heading 0 as "the way the robot faces now", so the pose stops matching FieldMap
+ *     until the next initialiseDriver().
+>>>>>>> Stashed changes
  * The drive and hold maths must agree on all of the above - if a wheel is wired the other way
  * round, every direction flips together, so fix it in one place only.
  */
 public class TeleOpDriver {
+<<<<<<< Updated upstream
     //
     // All tuning values live in DriveConfig, which is a @Config class: the Slothboard writes the
     // static fields directly, so a change in the browser applies on the next loop.
@@ -161,6 +168,119 @@ public class TeleOpDriver {
         return breach;
     }
 
+=======
+    /**
+     * Every knob the AutoTuner adjusts, with the values the robot ships with. The defaults are
+     * starting guesses, not measured numbers - AutoTuner writes the measured values into the
+     * live instance (getTuning()), and these literals are what a fresh run falls back to.
+     */
+    public static class Tuning {
+        public double kpTranslational = 0.0035;                  // power per mm of position error
+        public double kpHeading = 1.25;                          // power per radian of heading error
+        public double maxHoldPower = 0.60;                       // ceiling on any one wheel while holding
+        public double minHoldPower = 0.06;                       // friction floor; set 0 to disable
+        public double holdPositionDeadbandMm = 8.0;
+        public double holdHeadingDeadbandRad = Math.toRadians(1.5);
+        public double joystickEngageDeadband = 0.08;             // stick must pass this to count as input
+        public double joystickReleaseDeadband = 0.04;            // and drop below this to let go
+    }
+
+    private final HardwareMap hardwareMap;
+    private final Telemetry telemetry;
+    private final Gamepad gamepad;
+    private final Tuning tuning;
+
+    private final Localization localization;
+    private DcMotor frontLeft;
+    private DcMotor frontRight;
+    private DcMotor backLeft;
+    private DcMotor backRight;
+
+    // Hold brake state
+    private boolean isHoldBrakeEnabled = false;
+    private boolean isTargetPositionLocked = false;
+    private double targetXmm;
+    private double targetYmm;
+    private double targetHeadingRad;
+
+    private boolean translateInputActive = false;
+    private boolean rotateInputActive = false;
+    private boolean odometryReady = false;
+    private boolean telemetryEnabled = true;
+    private boolean tuningLoaded = false;
+    private String driveMode = "FIELD";
+
+    public TeleOpDriver(HardwareMap hardwareMap, Telemetry telemetry, Gamepad gamepad) {
+        this(hardwareMap, telemetry, gamepad, new Tuning());
+    }
+
+    public TeleOpDriver(HardwareMap hardwareMap, Telemetry telemetry, Gamepad gamepad, Tuning tuning) {
+        this.hardwareMap = hardwareMap;
+        this.telemetry = telemetry;
+        this.gamepad = gamepad;
+        this.tuning = tuning;
+        this.localization = new Localization(hardwareMap, telemetry);
+    }
+
+    /** Starts on the default (red) start pose. */
+    public void initialiseDriver() {
+        initialiseDriver(Alliance.RED);
+    }
+
+    /** Starts on this alliance's start pose from FieldMap. */
+    public void initialiseDriver(Alliance alliance) {
+        initialiseDriver(FieldMap.startPose(alliance));
+    }
+
+    /** Starts at an explicit field pose, in the FieldMap frame. */
+    public void initialiseDriver(Pose2D startPose) {
+        backLeft = hardwareMap.get(DcMotor.class, "BackLeftMotor");
+        backRight = hardwareMap.get(DcMotor.class, "BackRightMotor");
+        frontLeft = hardwareMap.get(DcMotor.class, "FrontLeftMotor");
+        frontRight = hardwareMap.get(DcMotor.class, "FrontRightMotor");
+
+        backLeft.setDirection(DcMotorSimple.Direction.REVERSE);
+        frontLeft.setDirection(DcMotorSimple.Direction.REVERSE);
+
+        backLeft.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        backRight.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        frontLeft.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        frontRight.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+
+        // The Pinpoint, pod offsets and pod directions live in Localization; the field frame and
+        // the per-alliance start tiles live in FieldMap. Saved tuning wins over the literals.
+        tuningLoaded = TuneStore.loadTuning(hardwareMap.appContext, tuning);
+        localization.initialise(startPose, telemetryEnabled);
+    }
+
+    public Tuning getTuning() {
+        return tuning;
+    }
+
+    public void setTelemetryEnabled(boolean enabled) {
+        telemetryEnabled = enabled;
+    }
+
+    // ------------------------------------------------------------------
+    // Hold brake controls
+    // ------------------------------------------------------------------
+
+    public boolean isHoldBrakeEnabled() {
+        return isHoldBrakeEnabled;
+    }
+
+    public void setHoldBrake(boolean enabled) {
+        isHoldBrakeEnabled = enabled;
+        if (!enabled) {
+            clearTarget();
+        }
+    }
+
+    public void toggleHoldBrake() {
+        setHoldBrake(!isHoldBrakeEnabled);
+    }
+
+>>>>>>> Stashed changes
     /** Locks the hold onto a specific pose. Used by the AutoTuner to set up a known error. */
     public void setHoldTarget(double xMm, double yMm, double headingRad) {
         targetXmm = xMm;
@@ -169,6 +289,13 @@ public class TeleOpDriver {
         isTargetPositionLocked = true;
     }
 
+<<<<<<< Updated upstream
+=======
+    public boolean isTargetPositionLocked() {
+        return isTargetPositionLocked;
+    }
+
+>>>>>>> Stashed changes
     private void clearTarget() {
         isTargetPositionLocked = false;
         targetXmm = 0;
@@ -181,9 +308,13 @@ public class TeleOpDriver {
      * does not need to be standing still and does not lose where it is on the field.
      */
     public void resetHeading() {
+<<<<<<< Updated upstream
         odo.setHeading(0, AngleUnit.RADIANS);
         // Refresh the cached pose so the next read really sees heading 0 rather than the old one.
         updateOdometry();
+=======
+        localization.resetHeading();
+>>>>>>> Stashed changes
         if (isTargetPositionLocked) {
             // Keep holding the same spot; only the heading reference moved.
             targetHeadingRad = 0;
@@ -195,6 +326,7 @@ public class TeleOpDriver {
     // ------------------------------------------------------------------
 
     public GoBildaPinpointDriver.DeviceStatus getOdometryStatus() {
+<<<<<<< Updated upstream
         return odo.getDeviceStatus();
     }
 
@@ -229,6 +361,57 @@ public class TeleOpDriver {
         clearTarget();
         odo.setPosition(new Pose2D(DistanceUnit.MM, 0, 0, AngleUnit.RADIANS, 0));
         updateOdometry();
+=======
+        return localization.getStatus();
+    }
+
+    public boolean isOdometryReady() {
+        return localization.isReady();
+    }
+
+    /** Last pose read from the Pinpoint; does not touch the bus. */
+    public Pose2D getPose() {
+        return localization.getPose();
+    }
+
+    /** Refreshes the Pinpoint, then returns the pose. */
+    public Pose2D readPose() {
+        return localization.readPose();
+    }
+
+    public double getHeadingRadians() {
+        return localization.getHeadingRadians();
+    }
+
+    public void resetPoseToOrigin() {
+        localization.resetPoseToOrigin();
+    }
+
+    /**
+     * Re-anchors the odometry frame at an explicit field pose without touching the hardware, so
+     * "wherever the robot is standing right now" becomes that pose. Used to restore the start
+     * pose after a tuning run has driven the robot around and re-zeroed its heading.
+     */
+    public void setPose(Pose2D pose) {
+        localization.setPose(pose);
+    }
+
+    /** The localisation this drive train runs on, for anything that only needs the pose. */
+    public Localization getLocalization() {
+        return localization;
+    }
+
+    /** Persists the live Tuning and the learned pod directions to the Control Hub. */
+    public boolean saveTuning() {
+        boolean saved = TuneStore.saveTuning(hardwareMap.appContext, tuning);
+        saved &= localization.saveConfig();
+        return saved;
+    }
+
+    /** True if initialiseDriver() loaded saved tuning instead of the compiled defaults. */
+    public boolean isTuningLoadedFromStore() {
+        return tuningLoaded;
+>>>>>>> Stashed changes
     }
 
     /**
@@ -236,6 +419,7 @@ public class TeleOpDriver {
      * left"; if the robot drives forward but X falls, flip the X pod rather than the motors.
      */
     public void setPodDirections(boolean xForward, boolean yForward) {
+<<<<<<< Updated upstream
         xPodForward = xForward;
         yPodForward = yForward;
         // Mirror into the config so the dashboard shows what the robot is actually using.
@@ -259,6 +443,17 @@ public class TeleOpDriver {
 
     public boolean isYPodForward() {
         return yPodForward;
+=======
+        localization.setPodDirections(xForward, yForward);
+    }
+
+    public boolean isXPodForward() {
+        return localization.isXPodForward();
+    }
+
+    public boolean isYPodForward() {
+        return localization.isYPodForward();
+>>>>>>> Stashed changes
     }
 
     // ------------------------------------------------------------------
@@ -267,7 +462,11 @@ public class TeleOpDriver {
 
     /** Runs the wheels at these robot-frame powers, bypassing the gamepad and the hold. */
     public void driveOpenLoop(double forward, double strafe, double rotate) {
+<<<<<<< Updated upstream
         updateOdometry();
+=======
+        localization.update();
+>>>>>>> Stashed changes
         applyWheelPowers(forward, strafe, rotate);
     }
 
@@ -278,6 +477,7 @@ public class TeleOpDriver {
         backRight.setPower(0);
     }
 
+<<<<<<< Updated upstream
     private double normalizeAngle(double radians) {
         double angle = radians;
         while (angle > Math.PI) angle -= 2 * Math.PI;
@@ -285,6 +485,8 @@ public class TeleOpDriver {
         return angle;
     }
 
+=======
+>>>>>>> Stashed changes
     private double clamp(double value, double limit) {
         return Math.max(-limit, Math.min(limit, value));
     }
@@ -294,8 +496,13 @@ public class TeleOpDriver {
      * the stick is back below the release threshold.
      */
     private boolean updateInputLatch(boolean active, double magnitude) {
+<<<<<<< Updated upstream
         if (magnitude > DriveConfig.joystickEngageDeadband) return true;
         if (magnitude < DriveConfig.joystickReleaseDeadband) return false;
+=======
+        if (magnitude > tuning.joystickEngageDeadband) return true;
+        if (magnitude < tuning.joystickReleaseDeadband) return false;
+>>>>>>> Stashed changes
         return active;
     }
 
@@ -303,6 +510,7 @@ public class TeleOpDriver {
      * Translational hold correction for a robot-frame error, lifted to a power that can actually
      * overcome static friction.
      */
+<<<<<<< Updated upstream
     private void holdTranslation(double errorForward, double errorRight) {
         holdForwardOut = 0;
         holdRightOut = 0;
@@ -336,19 +544,55 @@ public class TeleOpDriver {
 
         holdForwardOut = forward;
         holdRightOut = right;
+=======
+    private double[] holdTranslation(double errorForward, double errorRight) {
+        double translationMagnitude = Math.hypot(errorForward, errorRight);
+        if (translationMagnitude < tuning.holdPositionDeadbandMm) {
+            return new double[]{0, 0};
+        }
+
+        double forward = errorForward * tuning.kpTranslational;
+        double right = errorRight * tuning.kpTranslational;
+
+        double powerMagnitude = Math.hypot(forward, right);
+        if (powerMagnitude <= 0) {
+            return new double[]{0, 0};
+        }
+        if (powerMagnitude < tuning.minHoldPower) {
+            // A P-only output smaller than this just hums against static friction and the robot
+            // parks short of the target, so lift the vector to the floor.
+            double scale = tuning.minHoldPower / powerMagnitude;
+            forward *= scale;
+            right *= scale;
+        }
+        return new double[]{forward, right};
+>>>>>>> Stashed changes
     }
 
     /** Heading hold correction for a CCW-positive heading error. */
     private double holdHeading(double deltaHeading) {
+<<<<<<< Updated upstream
         if (Math.abs(deltaHeading) < DriveConfig.holdHeadingDeadbandRad) {
             return 0;
         }
         // The wheel mix treats +rotate as clockwise, so a positive (CCW) error needs negative power.
         return clamp(-deltaHeading * DriveConfig.kpHeading, DriveConfig.maxHoldPower);
+=======
+        if (Math.abs(deltaHeading) < tuning.holdHeadingDeadbandRad) {
+            return 0;
+        }
+        // The wheel mix treats +rotate as clockwise, so a positive (CCW) error needs negative power.
+        return clamp(-deltaHeading * tuning.kpHeading, tuning.maxHoldPower);
+>>>>>>> Stashed changes
     }
 
     /** Wheel mix plus normalisation. Inputs are in the robot frame. */
     private void applyWheelPowers(double forward, double strafe, double rotate) {
+<<<<<<< Updated upstream
+=======
+        double[] wheelSpeeds = new double[4];
+
+>>>>>>> Stashed changes
         wheelSpeeds[0] = forward + strafe + rotate; // front left
         wheelSpeeds[1] = forward - strafe - rotate; // front right
         wheelSpeeds[2] = forward - strafe + rotate; // back left
@@ -366,9 +610,16 @@ public class TeleOpDriver {
     }
 
     public void drive(double speedMultiplier) {
+<<<<<<< Updated upstream
         updateOdometry();
 
         Pose2D pos = cachedPose;
+=======
+        localization.update();
+
+        Pose2D pos = localization.getPose();
+        odometryReady = localization.isReady();
+>>>>>>> Stashed changes
 
         // Without trustworthy odometry the heading is meaningless, so drive robot-centric
         // (heading 0 makes the field-to-robot rotation the identity) and refuse to hold.
@@ -382,21 +633,29 @@ public class TeleOpDriver {
                 Math.max(Math.abs(forward), Math.abs(strafe)));
         rotateInputActive = updateInputLatch(rotateInputActive, Math.abs(rotate));
 
+<<<<<<< Updated upstream
         // Any real stick input while the brake is engaged drops the hold. Latch that, so a caller
         // (the AutoTuner) can tell a legitimate trial from one a stray thumb just ruined.
         if (isHoldBrakeEnabled && (translateInputActive || rotateInputActive)) {
             stickBreachLatch = true;
         }
 
+=======
+>>>>>>> Stashed changes
         boolean holdActive = isHoldBrakeEnabled && odometryReady && !translateInputActive;
 
         double driveForward;
         double driveStrafe;
         double driveRotate;
 
+<<<<<<< Updated upstream
         double cos = Math.cos(heading);
         double sin = Math.sin(heading);
 
+=======
+        // Both branches below hand FieldMap a field-frame vector and get robot-frame axes back,
+        // which is what the wheel mix wants (forward, right, clockwise).
+>>>>>>> Stashed changes
         if (holdActive) {
             if (!isTargetPositionLocked) {
                 targetXmm = pos.getX(DistanceUnit.MM);
@@ -407,6 +666,7 @@ public class TeleOpDriver {
 
             double deltaX = targetXmm - pos.getX(DistanceUnit.MM);
             double deltaY = targetYmm - pos.getY(DistanceUnit.MM);
+<<<<<<< Updated upstream
             double deltaHeading = normalizeAngle(targetHeadingRad - heading);
 
             // Rotate the field-frame error into the robot frame before feeding the wheel mix.
@@ -417,6 +677,18 @@ public class TeleOpDriver {
             holdTranslation(errorForward, errorRight);
             driveForward = holdForwardOut;
             driveStrafe = holdRightOut;
+=======
+            double deltaHeading = FieldMap.wrapRadians(targetHeadingRad - heading);
+
+            // Rotate the field-frame error into the robot frame before feeding the wheel mix.
+            double[] error = FieldMap.fieldToRobot(deltaX, deltaY, heading);
+            double errorForward = error[0];
+            double errorRight = error[1];
+
+            double[] translation = holdTranslation(errorForward, errorRight);
+            driveForward = translation[0];
+            driveStrafe = translation[1];
+>>>>>>> Stashed changes
 
             if (rotateInputActive) {
                 // Turn on the stick while still holding position, and let the held heading follow
@@ -431,8 +703,13 @@ public class TeleOpDriver {
             // wheel. Capping each axis separately would let a combined correction exceed the cap
             // and then be silently scaled down by the normaliser.
             double holdTotal = Math.abs(driveForward) + Math.abs(driveStrafe) + Math.abs(driveRotate);
+<<<<<<< Updated upstream
             if (holdTotal > DriveConfig.maxHoldPower) {
                 double scale = DriveConfig.maxHoldPower / holdTotal;
+=======
+            if (holdTotal > tuning.maxHoldPower) {
+                double scale = tuning.maxHoldPower / holdTotal;
+>>>>>>> Stashed changes
                 driveForward *= scale;
                 driveStrafe *= scale;
                 driveRotate *= scale;
@@ -444,8 +721,14 @@ public class TeleOpDriver {
 
             // Field-centric drive: rotate the stick vector from the field frame into the robot
             // frame. Stick forward is field +X; strafe is right-positive to match the wheels.
+<<<<<<< Updated upstream
             driveForward = (forward * cos - strafe * sin) * speedMultiplier;
             driveStrafe = (forward * sin + strafe * cos) * speedMultiplier;
+=======
+            double[] robot = FieldMap.fieldToRobot(forward, -strafe, heading);
+            driveForward = robot[0] * speedMultiplier;
+            driveStrafe = robot[1] * speedMultiplier;
+>>>>>>> Stashed changes
             driveRotate = rotate * speedMultiplier;
 
             driveMode = odometryReady ? "FIELD" : "ROBOT (odo not ready)";
@@ -459,10 +742,17 @@ public class TeleOpDriver {
 
         // Telemetry
         telemetry.addData("Mode: ", driveMode);
+<<<<<<< Updated upstream
         telemetry.addData("Odo Status: ", odo.getDeviceStatus());
         telemetry.addData("Robot X (mm): ", pos.getX(DistanceUnit.MM));
         telemetry.addData("Robot Y (mm): ", pos.getY(DistanceUnit.MM));
         telemetry.addData("Robot Heading: ", odo.getHeading(AngleUnit.RADIANS));
+=======
+        telemetry.addData("Odo Status: ", localization.getStatus());
+        telemetry.addData("Robot X (mm): ", pos.getX(DistanceUnit.MM));
+        telemetry.addData("Robot Y (mm): ", pos.getY(DistanceUnit.MM));
+        telemetry.addData("Robot Heading: ", localization.getHeadingRadians());
+>>>>>>> Stashed changes
         telemetry.addData("Forward Power: ", driveForward);
         telemetry.addData("Strafe Power: ", driveStrafe);
         telemetry.addData("Rotate Power: ", driveRotate);

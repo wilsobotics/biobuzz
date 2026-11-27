@@ -172,6 +172,8 @@ public class TeleOpController extends LinearOpMode {
 
         telemetry.addData("Intake State: ", intaker.getState());
         telemetry.addData("Balls: ", intaker.getBallCount());
+
+        telemetry.update();
     }
 }
 

@@ -17,6 +17,6 @@ public class TestIntake extends OpMode {
 
     @Override
     public void loop() {
-        motor.setPower(-gamepad1.right_trigger);
+        motor.setPower(gamepad1.right_trigger);
     }
 }

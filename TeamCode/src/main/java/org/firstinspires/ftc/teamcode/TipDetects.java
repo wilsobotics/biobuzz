@@ -5,19 +5,15 @@ import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.util.ElapsedTime;
+
 import java.util.List;
 
-public class TipDetects { //need to write as NextFTC subsystem
+public class TipDetects {
 
     public enum HiveState {
         SCORING_CELL_UP,
         AUDIENCE_CELL_UP,
         UNKNOWN
-    }
-
-    public enum Alliance {
-        RED,
-        BLUE
     }
 
     private Limelight3A limelight;
@@ -29,8 +25,14 @@ public class TipDetects { //need to write as NextFTC subsystem
     private int currentAudienceTags = 0;
 
     private static final double WATCHDOG_TIMEOUT_SEC = 10.0;
+    /** A result older than this (ms) is stale: the camera stalled or was unplugged. */
+    private static final long MAX_RESULT_STALENESS_MS = 250;
     //private static final double CAMERA_HEIGHT_METERS = 15.0 * 0.0254; // 15 inches
     //private static final double CAMERA_PITCH_DEG = 35.0;
+
+    private boolean cameraConnected = false;
+    private boolean resultFresh = false;
+    private long resultAgeMs = -1;
 
     public TipDetects(HardwareMap hardwareMap, String deviceName, Alliance alliance) {
         this.limelight = hardwareMap.get(Limelight3A.class, deviceName);
@@ -49,7 +51,16 @@ public class TipDetects { //need to write as NextFTC subsystem
         currentScoringTags = 0;
         currentAudienceTags = 0;
 
-        if (result != null && result.isValid()) {
+        // A valid-looking result is not enough: after a camera disconnect the Limelight keeps
+        // handing back its last frame, which would otherwise refresh the watchdog forever.
+        cameraConnected = limelight.isConnected();
+        resultAgeMs = result == null ? -1 : result.getStaleness();
+        resultFresh = cameraConnected
+                && result != null
+                && result.isValid()
+                && resultAgeMs <= MAX_RESULT_STALENESS_MS;
+
+        if (resultFresh) {
             List<LLResultTypes.FiducialResult> tags = result.getFiducialResults();
 
             for (LLResultTypes.FiducialResult tag : tags) {
@@ -70,7 +81,7 @@ public class TipDetects { //need to write as NextFTC subsystem
             }
         }
 
-        if (watchdogTimer.seconds() > WATCHDOG_TIMEOUT_SEC) {
+        if (!cameraConnected || watchdogTimer.seconds() > WATCHDOG_TIMEOUT_SEC) {
             currentState = HiveState.UNKNOWN;
         }
     }
@@ -97,6 +108,19 @@ public class TipDetects { //need to write as NextFTC subsystem
 
     public double getWatchdogTime() {
         return watchdogTimer.seconds();
+    }
+
+    public boolean isCameraConnected() {
+        return cameraConnected;
+    }
+
+    public boolean isResultFresh() {
+        return resultFresh;
+    }
+
+    /** Age of the last Limelight result in milliseconds, or -1 if there was none. */
+    public long getResultAgeMs() {
+        return resultAgeMs;
     }
 
     public void stop() {
